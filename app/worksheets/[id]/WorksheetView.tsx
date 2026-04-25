@@ -1,0 +1,678 @@
+'use client'
+
+import { useState, useRef, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
+import Image from 'next/image'
+import Link from 'next/link'
+import { createClient } from '@/utils/supabase/client'
+import type { WorksheetItemRaw, AssignmentRaw, StudentAnswerRaw } from './page'
+
+// ── Types ────────────────────────────────────────────────────────────────────
+type Question = {
+  id: string; subject: string; domain: string; skill: string; difficulty: string
+  question_image_url: string; answer_image_url: string; correct_answer: string
+}
+type Student = { id: string; full_name: string | null; email: string | null }
+
+type Block =
+  | { type: 'question';        localId: string; dbId: string | null; question: Question }
+  | { type: 'section_header';  localId: string; dbId: string | null; content: string }
+  | { type: 'note';            localId: string; dbId: string | null; content: string }
+
+function makeLid() { return Math.random().toString(36).slice(2) }
+
+function rawToBlock(item: WorksheetItemRaw): Block {
+  if (item.type === 'question' && item.questions) {
+    return { type: 'question', localId: makeLid(), dbId: item.id, question: item.questions as Question }
+  }
+  return { type: item.type as 'section_header' | 'note', localId: makeLid(), dbId: item.id, content: item.content ?? '' }
+}
+
+// ── Difficulty badge colours ──────────────────────────────────────────────────
+const diffBg   = (d: string) => d === 'Easy' ? '#f0fdf4' : d === 'Medium' ? '#fffbeb' : d === 'Hard' ? '#fef2f2' : '#f3f4f6'
+const diffCol  = (d: string) => d === 'Easy' ? '#16a34a' : d === 'Medium' ? '#d97706' : d === 'Hard' ? '#dc2626' : '#6b7280'
+const diffLabel = (d: string) => d || 'Unrated'
+
+// ── Main component ────────────────────────────────────────────────────────────
+export default function WorksheetView({
+  worksheetId,
+  initialTitle,
+  initialItems,
+  students,
+  assignments: initialAssignments,
+  studentAnswers: initialStudentAnswers,
+}: {
+  worksheetId: string
+  initialTitle: string
+  initialItems: WorksheetItemRaw[]
+  students: Student[]
+  assignments: AssignmentRaw[]
+  studentAnswers: StudentAnswerRaw[]
+}) {
+  const supabase = createClient()
+  const router = useRouter()
+
+  const [title, setTitle]         = useState(initialTitle)
+  const [blocks, setBlocks]       = useState<Block[]>(initialItems.map(rawToBlock))
+  const [saving, setSaving]       = useState(false)
+  const [saved, setSaved]         = useState(false)
+  const [showAnswers, setShowAnswers] = useState<Set<string>>(new Set())
+
+  // Assign modal
+  const [showAssign, setShowAssign] = useState(false)
+  const [assignments, setAssignments] = useState<AssignmentRaw[]>(initialAssignments)
+  const [studentAnswers] = useState<StudentAnswerRaw[]>(initialStudentAnswers)
+  const [selectedStudents, setSelectedStudents] = useState<Set<string>>(new Set())
+  const [dueDate, setDueDate]     = useState('')
+  const [assigning, setAssigning] = useState(false)
+  const [expandedAssignment, setExpandedAssignment] = useState<string | null>(null)
+  const [selectedAssignmentId, setSelectedAssignmentId] = useState<string | null>(null)
+
+  // Build a lookup for the selected student's answers
+  const selectedAnswersMap: Record<string, StudentAnswerRaw> = {}
+  if (selectedAssignmentId) {
+    studentAnswers.filter(sa => sa.assignment_id === selectedAssignmentId).forEach(sa => {
+      selectedAnswersMap[sa.question_id] = sa
+    })
+  }
+
+  // Inline "add block" picker state
+  const [addMenu, setAddMenu]     = useState<string | null>(null) // localId of block to insert after, or 'top'
+
+  // ── Block manipulation ────────────────────────────────────────────────────
+  const moveBlock = (localId: string, dir: -1 | 1) => {
+    setBlocks(prev => {
+      const idx = prev.findIndex(b => b.localId === localId)
+      if (idx < 0) return prev
+      const next = [...prev]
+      const swap = idx + dir
+      if (swap < 0 || swap >= next.length) return prev
+      ;[next[idx], next[swap]] = [next[swap], next[idx]]
+      return next
+    })
+  }
+
+  const removeBlock = (localId: string) =>
+    setBlocks(prev => prev.filter(b => b.localId !== localId))
+
+  const updateContent = (localId: string, content: string) =>
+    setBlocks(prev => prev.map(b => b.localId === localId ? { ...b, content } as Block : b))
+
+  const insertBlock = (afterLocalId: string | 'top', type: 'section_header' | 'note') => {
+    const newBlock: Block = { type, localId: makeLid(), dbId: null, content: '' }
+    setBlocks(prev => {
+      if (afterLocalId === 'top') return [newBlock, ...prev]
+      const idx = prev.findIndex(b => b.localId === afterLocalId)
+      return [...prev.slice(0, idx + 1), newBlock, ...prev.slice(idx + 1)]
+    })
+    setAddMenu(null)
+  }
+
+  const toggleAnswer = (localId: string) =>
+    setShowAnswers(prev => {
+      const next = new Set(prev)
+      if (next.has(localId)) { next.delete(localId) } else { next.add(localId) }
+      return next
+    })
+
+  // ── Save (full replace of worksheet_items) ────────────────────────────────
+  const save = useCallback(async () => {
+    setSaving(true)
+    setSaved(false)
+
+    // 1. Update worksheet title + updated_at
+    const { error: titleErr } = await supabase
+      .from('worksheets')
+      .update({ title: title.trim() || 'Untitled Worksheet', updated_at: new Date().toISOString() })
+      .eq('id', worksheetId)
+
+    if (titleErr) {
+      alert('Failed to save worksheet. Please try again.')
+      setSaving(false)
+      return
+    }
+
+    // 2. Build the new rows first, then delete + insert atomically
+    const rows = blocks.map((b, i) => ({
+      worksheet_id: worksheetId,
+      position: i,
+      type: b.type,
+      question_id: b.type === 'question' ? b.question.id : null,
+      content: b.type !== 'question' ? b.content : null,
+    }))
+
+    const { error: deleteErr } = await supabase
+      .from('worksheet_items')
+      .delete()
+      .eq('worksheet_id', worksheetId)
+
+    if (deleteErr) {
+      alert('Failed to save worksheet. Please try again.')
+      setSaving(false)
+      return
+    }
+
+    if (rows.length > 0) {
+      const { error: insertErr } = await supabase.from('worksheet_items').insert(rows)
+      if (insertErr) {
+        alert('Failed to save worksheet items. Your worksheet may be empty — please refresh and try again.')
+        setSaving(false)
+        return
+      }
+    }
+
+    setSaving(false)
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2500)
+  }, [supabase, worksheetId, title, blocks])
+
+  // ── Assign ───────────────────────────────────────────────────────────────
+  const handleAssign = async () => {
+    setAssigning(true)
+    await save() // save current state first
+    const rows = Array.from(selectedStudents).map(sid => ({
+      worksheet_id: worksheetId,
+      student_id: sid,
+      due_date: dueDate || null,
+    }))
+    // Insert with ignoreDuplicates — if a student already has attempt 1, skip
+    await supabase.from('student_assignments').upsert(rows, { onConflict: 'worksheet_id,student_id,attempt_number', ignoreDuplicates: true })
+
+    // Refresh assignments list
+    const { data, error: refreshErr } = await supabase
+      .from('student_assignments')
+      .select('id, assigned_at, due_date, status, student_id, attempt_number, profiles(id, full_name, email)')
+      .eq('worksheet_id', worksheetId)
+      .order('assigned_at', { ascending: false })
+    if (refreshErr) {
+      // Fallback without attempt_number
+      const { data: fallback } = await supabase
+        .from('student_assignments')
+        .select('id, assigned_at, due_date, status, student_id, profiles(id, full_name, email)')
+        .eq('worksheet_id', worksheetId)
+        .order('assigned_at', { ascending: false })
+      setAssignments(((fallback ?? []) as any[]).map(a => ({ ...a, attempt_number: 1 })) as AssignmentRaw[])
+    } else {
+      setAssignments(((data ?? []) as any[]).map(a => ({ ...a, attempt_number: a.attempt_number ?? 1 })) as AssignmentRaw[])
+    }
+
+    setAssigning(false)
+    setShowAssign(false)
+    setSelectedStudents(new Set())
+    setDueDate('')
+  }
+
+  const questionCount = blocks.filter(b => b.type === 'question').length
+
+  return (
+    <div className="flex-1 flex overflow-hidden">
+      {/* ── Document area ──────────────────────────────────────────────────── */}
+      <div className="flex-1 overflow-y-auto">
+        {/* Sticky toolbar */}
+        <div className="sticky top-0 z-10 border-b px-6 py-2.5 flex items-center justify-between gap-3"
+          style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
+          <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--text-muted)' }}>
+            <Link href="/worksheets" className="hover:underline">Worksheets</Link>
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+            <span className="truncate max-w-48" style={{ color: 'var(--foreground)' }}>{title || 'Untitled'}</span>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{questionCount} question{questionCount !== 1 ? 's' : ''}</span>
+            {saved && <span className="text-xs" style={{ color: '#16a34a' }}>Saved ✓</span>}
+            <button onClick={save} disabled={saving}
+              className="px-3 py-1.5 rounded-lg text-sm border disabled:opacity-50"
+              style={{ borderColor: 'var(--border)', color: 'var(--foreground)' }}>
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+            <button onClick={() => setShowAssign(true)}
+              className="px-3 py-1.5 rounded-lg text-sm font-medium text-white flex items-center gap-1.5"
+              style={{ background: 'var(--accent)' }}>
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+              </svg>
+              Assign
+            </button>
+          </div>
+        </div>
+
+        {/* Document */}
+        <div className="max-w-2xl mx-auto px-6 py-10">
+          {/* Editable title */}
+          <div
+            contentEditable
+            suppressContentEditableWarning
+            onBlur={e => setTitle(e.currentTarget.textContent?.trim() ?? '')}
+            className="text-3xl font-bold outline-none mb-1 empty:before:content-['Untitled_Worksheet'] empty:before:opacity-30"
+            style={{ color: 'var(--foreground)', minHeight: '1.2em' }}
+          >
+            {title}
+          </div>
+          <p className="text-xs mb-8" style={{ color: 'var(--text-muted)' }}>
+            {questionCount} question{questionCount !== 1 ? 's' : ''}
+            {assignments.length > 0 && ` · Assigned to ${assignments.length} student${assignments.length !== 1 ? 's' : ''}`}
+          </p>
+
+          {/* Add block at the top */}
+          <AddBlockButton onInsert={type => insertBlock('top', type)} />
+
+          {/* Blocks */}
+          <div className="space-y-1">
+            {blocks.map((block, idx) => {
+              const isFirst = idx === 0
+              const isLast  = idx === blocks.length - 1
+              const qNum    = blocks.slice(0, idx + 1).filter(b => b.type === 'question').length
+
+              return (
+                <div key={block.localId} className="group relative">
+                  {/* ── Section header ────────────────────────────────── */}
+                  {block.type === 'section_header' && (
+                    <div className="flex items-center gap-3 py-3">
+                      <div className="w-1 self-stretch rounded-full flex-shrink-0" style={{ background: 'var(--accent)' }} />
+                      <div
+                        contentEditable
+                        suppressContentEditableWarning
+                        onBlur={e => updateContent(block.localId, e.currentTarget.textContent ?? '')}
+                        className="flex-1 text-lg font-semibold outline-none empty:before:content-['Section_title…'] empty:before:opacity-30"
+                        style={{ color: 'var(--foreground)' }}
+                      >
+                        {block.content}
+                      </div>
+                      <BlockActions localId={block.localId} isFirst={isFirst} isLast={isLast} onMove={moveBlock} onRemove={removeBlock} />
+                    </div>
+                  )}
+
+                  {/* ── Note / instruction ────────────────────────────── */}
+                  {block.type === 'note' && (
+                    <div className="flex items-start gap-3 px-4 py-3 rounded-xl my-1" style={{ background: '#fefce8', border: '1px solid #fde68a' }}>
+                      <svg className="w-4 h-4 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="#ca8a04">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
+                      <div
+                        contentEditable
+                        suppressContentEditableWarning
+                        onBlur={e => updateContent(block.localId, e.currentTarget.textContent ?? '')}
+                        className="flex-1 text-sm outline-none empty:before:content-['Add_instructions_or_notes…'] empty:before:opacity-40"
+                        style={{ color: '#713f12' }}
+                      >
+                        {block.content}
+                      </div>
+                      <BlockActions localId={block.localId} isFirst={isFirst} isLast={isLast} onMove={moveBlock} onRemove={removeBlock} />
+                    </div>
+                  )}
+
+                  {/* ── Question ──────────────────────────────────────── */}
+                  {block.type === 'question' && (
+                    <div className="rounded-2xl border overflow-hidden my-2"
+                      style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
+                      {/* Question header */}
+                      <div className="flex items-center gap-3 px-4 py-2.5 border-b" style={{ borderColor: 'var(--border)' }}>
+                        <span className="w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-semibold"
+                          style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
+                          {qNum}
+                        </span>
+                        <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                          style={{ background: block.question.subject === 'english' ? '#fdf4ff' : '#eff6ff', color: block.question.subject === 'english' ? '#7e22ce' : '#1d4ed8' }}>
+                          {block.question.subject === 'english' ? 'English' : 'Math'}
+                        </span>
+                        <span className="text-xs flex-shrink-0" style={{ color: 'var(--text-muted)' }}>{block.question.domain}</span>
+                        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>·</span>
+                        <span className="text-xs truncate flex-1" style={{ color: 'var(--text-muted)' }}>{block.question.skill}</span>
+                        <span className="text-xs px-2 py-0.5 rounded-full flex-shrink-0"
+                          style={{ background: diffBg(block.question.difficulty), color: diffCol(block.question.difficulty) }}>
+                          {diffLabel(block.question.difficulty)}
+                        </span>
+                        <BlockActions localId={block.localId} isFirst={isFirst} isLast={isLast} onMove={moveBlock} onRemove={removeBlock} />
+                      </div>
+
+                      {/* Question image */}
+                      <div className="px-4 pt-4 pb-2">
+                        <Image
+                          src={block.question.question_image_url}
+                          alt={`Question ${qNum}`}
+                          width={700} height={350}
+                          className="w-full rounded-lg object-contain"
+                          style={{ maxHeight: 420 }}
+                          unoptimized
+                        />
+                      </div>
+
+                      {/* Student answer overlay (when a student is selected in sidebar) */}
+                      {selectedAssignmentId && block.type === 'question' && (() => {
+                        const sa = selectedAnswersMap[block.question.id]
+                        if (!sa) return (
+                          <div className="mx-4 mb-3 px-3 py-2 rounded-lg text-xs" style={{ background: '#f8f8f8', color: 'var(--text-muted)' }}>
+                            No answer recorded
+                          </div>
+                        )
+                        return (
+                          <div className="mx-4 mb-3 px-3 py-2 rounded-lg flex items-center gap-3 text-xs"
+                            style={{ background: sa.is_correct ? '#f0fdf4' : '#fef2f2', border: `1px solid ${sa.is_correct ? '#bbf7d0' : '#fecaca'}` }}>
+                            <span className="w-5 h-5 rounded-full flex items-center justify-center font-bold flex-shrink-0"
+                              style={{ background: sa.is_correct ? '#16a34a' : '#dc2626', color: 'white' }}>
+                              {sa.is_correct ? '✓' : '✗'}
+                            </span>
+                            <span style={{ color: sa.is_correct ? '#16a34a' : '#dc2626' }}>
+                              Answered <strong>{sa.selected_answer}</strong>
+                              {!sa.is_correct && <> (correct: <strong style={{ color: '#16a34a' }}>{block.question.correct_answer}</strong>)</>}
+                            </span>
+                            <span className="ml-auto" style={{ color: 'var(--text-muted)' }}>{sa.time_spent_seconds}s</span>
+                          </div>
+                        )
+                      })()}
+
+                      {/* Answer toggle */}
+                      <div className="px-4 pb-3 flex items-center gap-3">
+                        <button
+                          onClick={() => toggleAnswer(block.localId)}
+                          className="text-xs px-3 py-1 rounded-lg border transition-colors"
+                          style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
+                          {showAnswers.has(block.localId) ? 'Hide answer' : 'Show answer'}
+                        </button>
+                        {showAnswers.has(block.localId) && (
+                          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                            Correct: <strong style={{ color: 'var(--foreground)' }}>{block.question.correct_answer}</strong>
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Answer image */}
+                      {showAnswers.has(block.localId) && block.question.answer_image_url && (
+                        <div className="px-4 pb-4 border-t pt-3" style={{ borderColor: 'var(--border)' }}>
+                          <p className="text-xs font-medium mb-2" style={{ color: 'var(--text-muted)' }}>Answer</p>
+                          <Image
+                            src={block.question.answer_image_url}
+                            alt={`Answer ${qNum}`}
+                            width={700} height={350}
+                            className="w-full rounded-lg object-contain"
+                            style={{ maxHeight: 400 }}
+                            unoptimized
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Add block below */}
+                  <AddBlockButton onInsert={type => insertBlock(block.localId, type)} />
+                </div>
+              )
+            })}
+          </div>
+
+          {blocks.length === 0 && (
+            <div className="text-center py-16 rounded-2xl border-2 border-dashed"
+              style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
+              <p className="text-sm">This worksheet is empty.</p>
+              <p className="text-xs mt-1">Go to the Question Bank to add questions.</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Right sidebar: Assignments (sticky) ─────────────────────────── */}
+      <aside className="w-72 border-l flex-shrink-0 overflow-y-auto sticky top-0 h-screen p-4"
+        style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
+        <h2 className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>
+          Assigned to
+        </h2>
+
+        {selectedAssignmentId && (
+          <button
+            onClick={() => setSelectedAssignmentId(null)}
+            className="w-full text-left text-xs mb-3 px-2 py-1.5 rounded-lg border flex items-center gap-1.5"
+            style={{ borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-light)' }}>
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+            Clear overlay
+          </button>
+        )}
+
+        {assignments.length === 0 ? (
+          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Not assigned yet.</p>
+        ) : (
+          <div className="space-y-2">
+            {assignments.map(a => {
+              const p = a.profiles as { id: string; full_name: string | null; email: string | null } | null
+              const isExpanded = expandedAssignment === a.id
+              const isSelected = selectedAssignmentId === a.id
+              const aAnswers = studentAnswers.filter(sa => sa.assignment_id === a.id)
+              const correctCount = aAnswers.filter(sa => sa.is_correct).length
+              const totalAnswered = aAnswers.length
+              const totalTime = aAnswers.reduce((sum, sa) => sum + sa.time_spent_seconds, 0)
+              const questionBlocks = blocks.filter(b => b.type === 'question')
+
+              return (
+                <div key={a.id} className="rounded-lg border overflow-hidden"
+                  style={{
+                    borderColor: isSelected ? 'var(--accent)' : 'var(--border)',
+                    background: isSelected ? 'var(--accent-light)' : 'var(--background)',
+                    boxShadow: isSelected ? '0 0 0 1px var(--accent)' : 'none',
+                  }}>
+                  <div className="p-2.5">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-medium truncate" style={{ color: 'var(--foreground)' }}>
+                        {p?.full_name || p?.email || 'Unknown'}
+                        {(a.attempt_number ?? 1) > 1 && (
+                          <span className="ml-1 font-normal" style={{ color: 'var(--text-muted)' }}>
+                            #{a.attempt_number}
+                          </span>
+                        )}
+                      </p>
+                      {a.status === 'complete' && totalAnswered > 0 && (
+                        <span className="text-xs font-bold" style={{ color: correctCount / totalAnswered >= 0.7 ? '#16a34a' : correctCount / totalAnswered >= 0.5 ? '#d97706' : '#dc2626' }}>
+                          {Math.round((correctCount / totalAnswered) * 100)}%
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                      {a.status === 'complete' ? `${correctCount}/${totalAnswered} correct` : 'Pending'}
+                      {a.status === 'complete' && totalTime > 0 && ` · ${Math.floor(totalTime / 60)}m ${totalTime % 60}s`}
+                    </p>
+
+                    {/* Action buttons */}
+                    <div className="flex items-center gap-1.5 mt-2">
+                      {a.status === 'complete' && totalAnswered > 0 && (
+                        <button
+                          onClick={() => setSelectedAssignmentId(isSelected ? null : a.id)}
+                          className="text-xs px-2 py-1 rounded border font-medium"
+                          style={{
+                            borderColor: isSelected ? 'var(--accent)' : 'var(--border)',
+                            color: isSelected ? 'var(--accent)' : 'var(--foreground)',
+                            background: isSelected ? 'white' : 'transparent',
+                          }}>
+                          {isSelected ? 'Hide' : 'Show'} on worksheet
+                        </button>
+                      )}
+                      <button
+                        onClick={() => setExpandedAssignment(isExpanded ? null : a.id)}
+                        className="text-xs px-2 py-1 rounded border"
+                        style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
+                        {isExpanded ? 'Less' : 'Details'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Expanded: per-question results */}
+                  {isExpanded && a.status === 'complete' && totalAnswered > 0 && (
+                    <div className="border-t px-2.5 py-2 space-y-1" style={{ borderColor: 'var(--border)' }}>
+                      {questionBlocks.map((block, qIdx) => {
+                        if (block.type !== 'question') return null
+                        const ans = aAnswers.find(sa => sa.question_id === block.question.id)
+                        return (
+                          <div key={block.localId} className="flex items-center gap-1.5 text-xs">
+                            <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs flex-shrink-0"
+                              style={{
+                                background: ans?.is_correct ? '#f0fdf4' : ans ? '#fef2f2' : 'var(--border)',
+                                color: ans?.is_correct ? '#16a34a' : ans ? '#dc2626' : 'var(--text-muted)',
+                              }}>
+                              {ans?.is_correct ? '✓' : ans ? '✗' : '–'}
+                            </span>
+                            <span style={{ color: 'var(--text-muted)' }}>Q{qIdx + 1}</span>
+                            {ans && (
+                              <>
+                                <span style={{ color: 'var(--foreground)' }}>{ans.selected_answer}</span>
+                                {!ans.is_correct && (
+                                  <span style={{ color: '#16a34a' }}>({block.question.correct_answer})</span>
+                                )}
+                                <span className="ml-auto" style={{ color: 'var(--text-muted)' }}>{ans.time_spent_seconds}s</span>
+                              </>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+
+                  {isExpanded && a.status !== 'complete' && (
+                    <div className="border-t px-2.5 py-2" style={{ borderColor: 'var(--border)' }}>
+                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Not yet submitted.</p>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        <button
+          onClick={() => setShowAssign(true)}
+          className="mt-4 w-full py-2 rounded-lg text-xs font-medium text-white"
+          style={{ background: 'var(--accent)' }}>
+          + Assign to student
+        </button>
+      </aside>
+
+      {/* ── Assign modal ───────────────────────────────────────────────────── */}
+      {showAssign && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.45)' }}>
+          <div className="rounded-2xl shadow-2xl w-full max-w-sm p-6" style={{ background: 'var(--card)' }}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-semibold" style={{ color: 'var(--foreground)' }}>Assign to Students</h2>
+              <button onClick={() => setShowAssign(false)} style={{ color: 'var(--text-muted)' }}>
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {students.length === 0 ? (
+              <div className="text-center py-5 rounded-xl border-2 border-dashed mb-4"
+                style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
+                <p className="text-sm font-medium">No students yet</p>
+                <p className="text-xs mt-1">Students appear here once they sign up and are assigned the student role.</p>
+              </div>
+            ) : (
+              <div className="space-y-1 mb-4 max-h-48 overflow-y-auto">
+                {students.map(s => {
+                  const checked = selectedStudents.has(s.id)
+                  return (
+                    <label key={s.id}
+                      className="flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer"
+                      style={{ background: checked ? 'var(--accent-light)' : 'transparent' }}>
+                      <input type="checkbox" checked={checked}
+                        onChange={() => setSelectedStudents(prev => {
+                          const next = new Set(prev)
+                          if (next.has(s.id)) { next.delete(s.id) } else { next.add(s.id) }
+                          return next
+                        })}
+                        className="w-4 h-4 rounded" style={{ accentColor: 'var(--accent)' }} />
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate" style={{ color: 'var(--foreground)' }}>{s.full_name || s.email}</p>
+                        {s.full_name && s.email && <p className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>{s.email}</p>}
+                      </div>
+                    </label>
+                  )
+                })}
+              </div>
+            )}
+
+            <div className="mb-4">
+              <label className="text-xs font-medium block mb-1" style={{ color: 'var(--text-muted)' }}>Due date (optional)</label>
+              <input type="date" value={dueDate} onChange={e => setDueDate(e.target.value)}
+                className="w-full text-sm px-3 py-2 rounded-lg border outline-none"
+                style={{ borderColor: 'var(--border)', background: 'var(--background)', color: 'var(--foreground)' }} />
+            </div>
+
+            <button onClick={handleAssign} disabled={assigning || selectedStudents.size === 0}
+              className="w-full py-2.5 rounded-lg text-sm font-medium text-white disabled:opacity-50"
+              style={{ background: 'var(--accent)' }}>
+              {assigning ? 'Assigning…' : `Assign to ${selectedStudents.size || 0} student${selectedStudents.size !== 1 ? 's' : ''}`}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Add block button (shows on hover between blocks) ─────────────────────────
+function AddBlockButton({ onInsert }: { onInsert: (type: 'section_header' | 'note') => void }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="relative flex items-center justify-center my-0.5 h-5 group/add">
+      <div className="absolute inset-x-0 h-px opacity-0 group-hover/add:opacity-100 transition-opacity"
+        style={{ background: 'var(--border)' }} />
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="relative z-10 w-5 h-5 rounded-full border flex items-center justify-center opacity-0 group-hover/add:opacity-100 transition-opacity text-xs"
+        style={{ background: 'var(--card)', borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
+        +
+      </button>
+      {open && (
+        <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 z-20 rounded-xl border shadow-lg overflow-hidden w-44"
+          style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
+          <button onMouseDown={() => { onInsert('section_header'); setOpen(false) }}
+            className="w-full text-left px-3 py-2 text-xs flex items-center gap-2 hover:opacity-80"
+            style={{ color: 'var(--foreground)' }}>
+            <span className="w-4 h-4 rounded flex items-center justify-center text-white text-xs flex-shrink-0" style={{ background: 'var(--accent)' }}>H</span>
+            Section header
+          </button>
+          <button onMouseDown={() => { onInsert('note'); setOpen(false) }}
+            className="w-full text-left px-3 py-2 text-xs flex items-center gap-2 hover:opacity-80 border-t"
+            style={{ borderColor: 'var(--border)', color: 'var(--foreground)' }}>
+            <span className="w-4 h-4 rounded flex items-center justify-center text-xs flex-shrink-0" style={{ background: '#fef9c3', color: '#ca8a04' }}>✎</span>
+            Note / instructions
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Block action buttons (up, down, delete) ──────────────────────────────────
+function BlockActions({
+  localId, isFirst, isLast, onMove, onRemove
+}: {
+  localId: string; isFirst: boolean; isLast: boolean
+  onMove: (id: string, dir: -1 | 1) => void
+  onRemove: (id: string) => void
+}) {
+  return (
+    <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+      <button onClick={() => onMove(localId, -1)} disabled={isFirst}
+        className="w-6 h-6 rounded flex items-center justify-center disabled:opacity-20"
+        style={{ color: 'var(--text-muted)' }} title="Move up">
+        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+        </svg>
+      </button>
+      <button onClick={() => onMove(localId, 1)} disabled={isLast}
+        className="w-6 h-6 rounded flex items-center justify-center disabled:opacity-20"
+        style={{ color: 'var(--text-muted)' }} title="Move down">
+        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      <button onClick={() => onRemove(localId)}
+        className="w-6 h-6 rounded flex items-center justify-center"
+        style={{ color: '#ef4444' }} title="Remove">
+        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+        </svg>
+      </button>
+    </div>
+  )
+}
