@@ -8,8 +8,6 @@ export async function GET(request: NextRequest) {
   const code = searchParams.get('code')
   const next = searchParams.get('next') ?? '/dashboard'
 
-  let exchangeError: string | null = null
-
   if (code) {
     const cookieStore = await cookies()
     const supabase = createServerClient(
@@ -28,7 +26,6 @@ export async function GET(request: NextRequest) {
     )
 
     const { error } = await supabase.auth.exchangeCodeForSession(code)
-    console.log('[auth/callback] error:', error?.message ?? 'none', 'status:', error?.status)
     if (!error) {
       // Auto-create or update profile with name from Google OAuth
       try {
@@ -51,10 +48,7 @@ export async function GET(request: NextRequest) {
       }
       return NextResponse.redirect(`${origin}${next}`)
     }
-    exchangeError = error?.message ?? 'unknown'
   }
 
-  const detail = encodeURIComponent(exchangeError ?? 'no_code')
-  console.log('[auth/callback] FAIL detail:', detail)
-  return NextResponse.redirect(`${origin}/login?error=auth_failed&detail=${detail}`)
+  return NextResponse.redirect(`${origin}/login?error=auth_failed`)
 }
