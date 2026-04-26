@@ -26,6 +26,7 @@ export async function GET(request: NextRequest) {
     )
 
     const { error } = await supabase.auth.exchangeCodeForSession(code)
+    console.log('[auth/callback] code present:', !!code, 'error:', error?.message ?? 'none')
     if (!error) {
       // Auto-create or update profile with name from Google OAuth
       try {
@@ -58,5 +59,6 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  console.log('[auth/callback] failing — code present:', !!code)
   return NextResponse.redirect(`${origin}/login?error=auth_failed`)
 }
