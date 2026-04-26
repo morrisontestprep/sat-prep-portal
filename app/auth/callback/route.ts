@@ -8,6 +8,8 @@ export async function GET(request: NextRequest) {
   const code = searchParams.get('code')
   const next = searchParams.get('next') ?? '/dashboard'
 
+  let exchangeError: string | null = null
+
   if (code) {
     const cookieStore = await cookies()
     const supabase = createServerClient(
@@ -26,7 +28,7 @@ export async function GET(request: NextRequest) {
     )
 
     const { error } = await supabase.auth.exchangeCodeForSession(code)
-    console.log('[auth/callback] code present:', !!code, 'error:', error?.message ?? 'none')
+    console.log('[auth/callback] error:', error?.message ?? 'none', 'status:', error?.status)
     if (!error) {
       // Auto-create or update profile with name from Google OAuth
       try {
@@ -39,26 +41,20 @@ export async function GET(request: NextRequest) {
           const teacherEmail = process.env.TEACHER_EMAIL || 'morrisontestprep@gmail.com'
           const role = user.email === teacherEmail ? 'teacher' : 'student'
 
-          // Upsert profile — creates on first login, updates name on subsequent logins
           await supabase.from('profiles').upsert(
-            {
-              id: user.id,
-              email: user.email,
-              full_name: fullName,
-              role: role,
-            },
+            { id: user.id, email: user.email, full_name: fullName, role },
             { onConflict: 'id' }
           )
         }
       } catch (e) {
-        // Profile upsert failure shouldn't block login
         console.error('Profile upsert error:', e)
       }
-
       return NextResponse.redirect(`${origin}${next}`)
     }
+    exchangeError = error?.message ?? 'unknown'
   }
 
-  console.log('[auth/callback] failing — code present:', !!code)
-  return NextResponse.redirect(`${origin}/login?error=auth_failed`)
+  const detail = encodeURIComponent(exchangeError ?? 'no_code')
+  console.log('[auth/callback] FAIL detail:', detail)
+  return NextResponse.redirect(`${origin}/login?error=auth_failed&detail=${detail}`)
 }
