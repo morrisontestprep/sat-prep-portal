@@ -251,7 +251,10 @@ export default function WorksheetView({
           </div>
           <p className="text-xs mb-8" style={{ color: 'var(--text-muted)' }}>
             {questionCount} question{questionCount !== 1 ? 's' : ''}
-            {assignments.length > 0 && ` · Assigned to ${assignments.length} student${assignments.length !== 1 ? 's' : ''}`}
+            {assignments.length > 0 && (() => {
+              const distinctCount = new Set(assignments.map(a => a.student_id)).size
+              return ` · Assigned to ${distinctCount} student${distinctCount !== 1 ? 's' : ''}`
+            })()}
           </p>
 
           {/* Add block at the top */}
@@ -331,9 +334,8 @@ export default function WorksheetView({
                         <Image
                           src={block.question.question_image_url}
                           alt={`Question ${qNum}`}
-                          width={700} height={350}
+                          width={700} height={700}
                           className="w-full rounded-lg object-contain"
-                          style={{ maxHeight: 420 }}
                           unoptimized
                         />
                       </div>
@@ -347,17 +349,33 @@ export default function WorksheetView({
                           </div>
                         )
                         return (
-                          <div className="mx-4 mb-3 px-3 py-2 rounded-lg flex items-center gap-3 text-xs"
-                            style={{ background: sa.is_correct ? '#f0fdf4' : '#fef2f2', border: `1px solid ${sa.is_correct ? '#bbf7d0' : '#fecaca'}` }}>
-                            <span className="w-5 h-5 rounded-full flex items-center justify-center font-bold flex-shrink-0"
-                              style={{ background: sa.is_correct ? '#16a34a' : '#dc2626', color: 'white' }}>
-                              {sa.is_correct ? '✓' : '✗'}
-                            </span>
-                            <span style={{ color: sa.is_correct ? '#16a34a' : '#dc2626' }}>
-                              Answered <strong>{sa.selected_answer}</strong>
-                              {!sa.is_correct && <> (correct: <strong style={{ color: '#16a34a' }}>{block.question.correct_answer}</strong>)</>}
-                            </span>
-                            <span className="ml-auto" style={{ color: 'var(--text-muted)' }}>{sa.time_spent_seconds}s</span>
+                          <div className="mx-4 mb-3 rounded-lg overflow-hidden text-xs"
+                            style={{ border: `1px solid ${sa.is_correct ? '#bbf7d0' : '#fecaca'}` }}>
+                            {/* Answer row */}
+                            <div className="px-3 py-2 flex items-center gap-3"
+                              style={{ background: sa.is_correct ? '#f0fdf4' : '#fef2f2' }}>
+                              <span className="w-5 h-5 rounded-full flex items-center justify-center font-bold flex-shrink-0"
+                                style={{ background: sa.is_correct ? '#16a34a' : '#dc2626', color: 'white' }}>
+                                {sa.is_correct ? '✓' : '✗'}
+                              </span>
+                              <span style={{ color: sa.is_correct ? '#16a34a' : '#dc2626' }}>
+                                Answered <strong>{sa.selected_answer}</strong>
+                                {!sa.is_correct && <> (correct: <strong style={{ color: '#16a34a' }}>{block.question.correct_answer}</strong>)</>}
+                              </span>
+                              {sa.confidence_level != null && (
+                                <span className="ml-auto flex items-center gap-1" style={{ color: 'var(--text-muted)' }}>
+                                  Confidence: <strong style={{ color: 'var(--foreground)' }}>{sa.confidence_level}/5</strong>
+                                </span>
+                              )}
+                              <span style={{ color: 'var(--text-muted)' }}>{sa.time_spent_seconds}s</span>
+                            </div>
+                            {/* Notes row */}
+                            {sa.student_notes && (
+                              <div className="px-3 py-2 border-t" style={{ background: '#fefce8', borderColor: '#fde68a' }}>
+                                <span className="font-medium" style={{ color: '#92400e' }}>Note: </span>
+                                <span style={{ color: '#713f12' }}>{sa.student_notes}</span>
+                              </div>
+                            )}
                           </div>
                         )
                       })()}
@@ -497,28 +515,43 @@ export default function WorksheetView({
 
                   {/* Expanded: per-question results */}
                   {isExpanded && a.status === 'complete' && totalAnswered > 0 && (
-                    <div className="border-t px-2.5 py-2 space-y-1" style={{ borderColor: 'var(--border)' }}>
+                    <div className="border-t px-2.5 py-2 space-y-2" style={{ borderColor: 'var(--border)' }}>
                       {questionBlocks.map((block, qIdx) => {
                         if (block.type !== 'question') return null
                         const ans = aAnswers.find(sa => sa.question_id === block.question.id)
                         return (
-                          <div key={block.localId} className="flex items-center gap-1.5 text-xs">
-                            <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs flex-shrink-0"
-                              style={{
-                                background: ans?.is_correct ? '#f0fdf4' : ans ? '#fef2f2' : 'var(--border)',
-                                color: ans?.is_correct ? '#16a34a' : ans ? '#dc2626' : 'var(--text-muted)',
-                              }}>
-                              {ans?.is_correct ? '✓' : ans ? '✗' : '–'}
-                            </span>
-                            <span style={{ color: 'var(--text-muted)' }}>Q{qIdx + 1}</span>
-                            {ans && (
-                              <>
-                                <span style={{ color: 'var(--foreground)' }}>{ans.selected_answer}</span>
-                                {!ans.is_correct && (
-                                  <span style={{ color: '#16a34a' }}>({block.question.correct_answer})</span>
-                                )}
-                                <span className="ml-auto" style={{ color: 'var(--text-muted)' }}>{ans.time_spent_seconds}s</span>
-                              </>
+                          <div key={block.localId} className="text-xs">
+                            <div className="flex items-center gap-1.5">
+                              <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs flex-shrink-0"
+                                style={{
+                                  background: ans?.is_correct ? '#f0fdf4' : ans ? '#fef2f2' : 'var(--border)',
+                                  color: ans?.is_correct ? '#16a34a' : ans ? '#dc2626' : 'var(--text-muted)',
+                                }}>
+                                {ans?.is_correct ? '✓' : ans ? '✗' : '–'}
+                              </span>
+                              <span style={{ color: 'var(--text-muted)' }}>Q{qIdx + 1}</span>
+                              {ans && (
+                                <>
+                                  <span style={{ color: 'var(--foreground)' }}>{ans.selected_answer}</span>
+                                  {!ans.is_correct && (
+                                    <span style={{ color: '#16a34a' }}>({block.question.correct_answer})</span>
+                                  )}
+                                  {ans.confidence_level != null && (
+                                    <span className="ml-auto" style={{ color: 'var(--text-muted)' }}>
+                                      {ans.confidence_level}/5 · {ans.time_spent_seconds}s
+                                    </span>
+                                  )}
+                                  {ans.confidence_level == null && (
+                                    <span className="ml-auto" style={{ color: 'var(--text-muted)' }}>{ans.time_spent_seconds}s</span>
+                                  )}
+                                </>
+                              )}
+                            </div>
+                            {ans?.student_notes && (
+                              <div className="mt-1 ml-6 px-2 py-1 rounded text-xs italic"
+                                style={{ background: '#fefce8', color: '#713f12' }}>
+                                "{ans.student_notes}"
+                              </div>
                             )}
                           </div>
                         )

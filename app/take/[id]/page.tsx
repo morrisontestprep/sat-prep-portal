@@ -62,7 +62,7 @@ export default async function TakeAssignmentPage({ params }: { params: Promise<{
   // Fetch any existing answers
   const { data: existingAnswers } = await supabase
     .from('student_answers')
-    .select('question_id, selected_answer, is_correct, time_spent_seconds')
+    .select('question_id, selected_answer, is_correct, time_spent_seconds, student_notes, confidence_level')
     .eq('assignment_id', assignmentId)
 
   return (
@@ -105,4 +105,6 @@ export type ExistingAnswer = {
   selected_answer: string | null
   is_correct: boolean | null
   time_spent_seconds: number
+  student_notes: string | null
+  confidence_level: number | null
 }

@@ -77,7 +77,7 @@ export default async function WorksheetDetailPage({
   const { data: studentAnswers } = assignmentIds.length > 0
     ? await supabase
         .from('student_answers')
-        .select('assignment_id, question_id, selected_answer, is_correct, time_spent_seconds')
+        .select('assignment_id, question_id, selected_answer, is_correct, time_spent_seconds, student_notes, confidence_level')
         .in('assignment_id', assignmentIds)
     : { data: [] }
 
@@ -131,4 +131,6 @@ export type StudentAnswerRaw = {
   selected_answer: string | null
   is_correct: boolean | null
   time_spent_seconds: number
+  student_notes: string | null
+  confidence_level: number | null
 }

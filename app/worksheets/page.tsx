@@ -18,24 +18,41 @@ export default async function WorksheetsPage() {
 
   const { data: worksheets } = await supabase
     .from('worksheets')
-    .select(`
-      id,
-      title,
-      created_at,
-      updated_at,
-      worksheet_items(count),
-      student_assignments(count)
-    `)
+    .select('id, title, created_at, updated_at')
     .order('updated_at', { ascending: false })
 
-  // Flatten counts for the client component
+  // Count only question-type items per worksheet
+  const { data: questionItems } = await supabase
+    .from('worksheet_items')
+    .select('worksheet_id')
+    .eq('type', 'question')
+
+  // Count distinct students per worksheet (not total attempts)
+  const { data: allAssignments } = await supabase
+    .from('student_assignments')
+    .select('worksheet_id, student_id')
+
+  const questionCountByWs = (questionItems ?? []).reduce((acc, item) => {
+    const id = (item as any).worksheet_id as string
+    acc[id] = (acc[id] || 0) + 1
+    return acc
+  }, {} as Record<string, number>)
+
+  const studentSetByWs = (allAssignments ?? []).reduce((acc, a) => {
+    const id = (a as any).worksheet_id as string
+    const sid = (a as any).student_id as string
+    if (!acc[id]) acc[id] = new Set<string>()
+    acc[id].add(sid)
+    return acc
+  }, {} as Record<string, Set<string>>)
+
   const flat = (worksheets ?? []).map(ws => ({
     id: ws.id,
     title: ws.title,
     created_at: ws.created_at,
     updated_at: ws.updated_at,
-    item_count: (ws.worksheet_items as unknown as { count: number }[])?.[0]?.count ?? 0,
-    assign_count: (ws.student_assignments as unknown as { count: number }[])?.[0]?.count ?? 0,
+    question_count: questionCountByWs[ws.id] ?? 0,
+    assign_count: studentSetByWs[ws.id]?.size ?? 0,
   }))
 
   return (

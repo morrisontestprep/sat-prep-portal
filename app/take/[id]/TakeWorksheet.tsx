@@ -40,7 +40,21 @@ export default function TakeWorksheet({
     return map
   }
 
+  const buildInitialNotes = () => {
+    const map: Record<string, string> = {}
+    existingAnswers.forEach(a => { if (a.student_notes) map[a.question_id] = a.student_notes })
+    return map
+  }
+
+  const buildInitialConfidence = () => {
+    const map: Record<string, number | null> = {}
+    existingAnswers.forEach(a => { if (a.confidence_level != null) map[a.question_id] = a.confidence_level })
+    return map
+  }
+
   const [answers, setAnswers] = useState(buildInitialAnswers)
+  const [notes, setNotes] = useState<Record<string, string>>(buildInitialNotes)
+  const [confidence, setConfidence] = useState<Record<string, number | null>>(buildInitialConfidence)
   const [status, setStatus] = useState(initialStatus)
   const [submitting, setSubmitting] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -101,6 +115,35 @@ export default function TakeWorksheet({
     }
   }, [totalQuestions, isComplete, flushTimer, questionItems, answers])
 
+  const saveNotes = async (questionId: string, text: string) => {
+    await supabase.from('student_answers').upsert({
+      assignment_id: assignmentId,
+      question_id: questionId,
+      student_id: studentId,
+      selected_answer: answers[questionId]?.selected ?? null,
+      is_correct: answers[questionId]?.isCorrect ?? null,
+      time_spent_seconds: timerRef.current[questionId] || 0,
+      student_notes: text || null,
+      confidence_level: confidence[questionId] ?? null,
+      answered_at: new Date().toISOString(),
+    }, { onConflict: 'assignment_id,question_id' })
+  }
+
+  const saveConfidence = async (questionId: string, level: number) => {
+    setConfidence(prev => ({ ...prev, [questionId]: level }))
+    await supabase.from('student_answers').upsert({
+      assignment_id: assignmentId,
+      question_id: questionId,
+      student_id: studentId,
+      selected_answer: answers[questionId]?.selected ?? null,
+      is_correct: answers[questionId]?.isCorrect ?? null,
+      time_spent_seconds: timerRef.current[questionId] || 0,
+      student_notes: notes[questionId] || null,
+      confidence_level: level,
+      answered_at: new Date().toISOString(),
+    }, { onConflict: 'assignment_id,question_id' })
+  }
+
   const handleSelectAnswer = async (choice: string) => {
     if (isComplete) return
     const currentQ = questionItems[currentIndex]?.questions
@@ -125,6 +168,8 @@ export default function TakeWorksheet({
         selected_answer: choice,
         is_correct: isCorrect,
         time_spent_seconds: timeSpent,
+        student_notes: notes[currentQ.id] || null,
+        confidence_level: confidence[currentQ.id] ?? null,
         answered_at: new Date().toISOString(),
       }, { onConflict: 'assignment_id,question_id' })
 
@@ -136,10 +181,13 @@ export default function TakeWorksheet({
   const handleSubmit = async () => {
     const unanswered = questionItems.filter(i => !answers[i.questions!.id]?.selected)
     if (unanswered.length > 0) {
-      const firstIdx = questionItems.findIndex(i => i.id === unanswered[0].id)
-      alert(`You still have ${unanswered.length} unanswered question${unanswered.length > 1 ? 's' : ''}.`)
-      goToQuestion(firstIdx)
-      return
+      const confirmed = window.confirm(
+        `You have ${unanswered.length} unanswered question${unanswered.length > 1 ? 's' : ''}. Submit anyway?`
+      )
+      if (!confirmed) {
+        goToQuestion(questionItems.findIndex(i => i.id === unanswered[0].id))
+        return
+      }
     }
 
     setSubmitting(true)
@@ -586,6 +634,47 @@ export default function TakeWorksheet({
                 })}
               </div>
             )}
+
+            {/* Notes & confidence (optional) */}
+            <div className="mt-5 space-y-3 border-t pt-4" style={{ borderColor: 'var(--border)' }}>
+              <div>
+                <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-muted)' }}>
+                  How did you approach this? <span className="font-normal">(optional)</span>
+                </label>
+                <textarea
+                  value={notes[currentQ.id] || ''}
+                  onChange={e => setNotes(prev => ({ ...prev, [currentQ.id]: e.target.value }))}
+                  onBlur={e => { if (e.target.value !== (existingAnswers.find(a => a.question_id === currentQ.id)?.student_notes ?? '')) saveNotes(currentQ.id, e.target.value) }}
+                  placeholder="Describe your thinking..."
+                  rows={2}
+                  className="w-full px-3 py-2.5 rounded-xl border text-sm resize-none outline-none"
+                  style={{ borderColor: 'var(--border)', background: 'var(--card)', color: 'var(--foreground)' }}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium block mb-1.5" style={{ color: 'var(--text-muted)' }}>
+                  Confidence level <span className="font-normal">(optional)</span>
+                </label>
+                <div className="flex items-center gap-2">
+                  {[1, 2, 3, 4, 5].map(n => (
+                    <button
+                      key={n}
+                      onClick={() => saveConfidence(currentQ.id, n)}
+                      className="w-10 h-10 rounded-full border font-semibold text-sm transition-all"
+                      style={{
+                        background: confidence[currentQ.id] === n ? 'var(--accent)' : 'var(--card)',
+                        borderColor: confidence[currentQ.id] === n ? 'var(--accent)' : 'var(--border)',
+                        color: confidence[currentQ.id] === n ? 'white' : 'var(--foreground)',
+                      }}>
+                      {n}
+                    </button>
+                  ))}
+                  <span className="text-xs ml-1" style={{ color: 'var(--text-muted)' }}>
+                    {confidence[currentQ.id] ? `${confidence[currentQ.id]}/5` : 'not set'}
+                  </span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}
