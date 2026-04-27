@@ -225,6 +225,23 @@ export default function TakeWorksheet({
     setStatus('complete')
     setJustSubmitted(true)
     setSubmitting(false)
+
+    // Notify teacher of submission (fire-and-forget)
+    const finalCorrect = questionItems.filter(i => {
+      const a = answers[i.questions!.id]
+      return a?.isCorrect === true
+    }).length
+    fetch('/api/notify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'submission',
+        worksheetTitle,
+        correctCount: finalCorrect,
+        totalQuestions,
+        worksheetId,
+      }),
+    }).catch(console.error)
   }
 
   const handleRedo = async () => {

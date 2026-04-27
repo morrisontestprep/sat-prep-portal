@@ -2,6 +2,7 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
+import { sendStudentSignupNotification } from '@/utils/email'
 
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url)
@@ -38,10 +39,22 @@ export async function GET(request: NextRequest) {
           const teacherEmail = process.env.TEACHER_EMAIL || 'morrisontestprep@gmail.com'
           const role = user.email === teacherEmail ? 'teacher' : 'student'
 
+          // Check if this is a brand-new student (no existing profile)
+          const { data: existingProfile } = await supabase
+            .from('profiles')
+            .select('id')
+            .eq('id', user.id)
+            .maybeSingle()
+
           await supabase.from('profiles').upsert(
             { id: user.id, email: user.email, full_name: fullName, role },
             { onConflict: 'id' }
           )
+
+          // Notify teacher of new student signup (only on first sign-in)
+          if (!existingProfile && role === 'student') {
+            sendStudentSignupNotification(fullName ?? '', user.email ?? '').catch(console.error)
+          }
         }
       } catch (e) {
         console.error('Profile upsert error:', e)

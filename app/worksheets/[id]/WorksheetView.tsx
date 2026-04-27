@@ -196,6 +196,31 @@ export default function WorksheetView({
       setAssignments(((data ?? []) as any[]).map(a => ({ ...a, attempt_number: a.attempt_number ?? 1 })) as AssignmentRaw[])
     }
 
+    // Notify each newly assigned student (fire-and-forget)
+    const newAssignmentsList = data ?? []
+    const notifications = Array.from(selectedStudents).map(sid => {
+      const studentProfile = students.find(s => s.id === sid)
+      // Find the newly created assignment for this student
+      const newAssignment = (newAssignmentsList as any[]).find(
+        (a: any) => a.student_id === sid && a.attempt_number === 1
+      )
+      return {
+        studentEmail: studentProfile?.email ?? '',
+        studentName: studentProfile?.full_name ?? '',
+        worksheetTitle: title,
+        dueDate: dueDate || null,
+        assignmentId: newAssignment?.id ?? '',
+      }
+    }).filter(n => n.studentEmail && n.assignmentId)
+
+    if (notifications.length > 0) {
+      fetch('/api/notify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'assignment', assignments: notifications }),
+      }).catch(console.error)
+    }
+
     setAssigning(false)
     setShowAssign(false)
     setSelectedStudents(new Set())
