@@ -461,6 +461,7 @@ export default function WorksheetView({
               const totalAnswered = aAnswers.length
               const totalTime = aAnswers.reduce((sum, sa) => sum + sa.time_spent_seconds, 0)
               const questionBlocks = blocks.filter(b => b.type === 'question')
+              const totalQuestions = questionBlocks.length
 
               return (
                 <div key={a.id} className="rounded-lg border overflow-hidden"
@@ -479,14 +480,14 @@ export default function WorksheetView({
                           </span>
                         )}
                       </p>
-                      {a.status === 'complete' && totalAnswered > 0 && (
-                        <span className="text-xs font-bold" style={{ color: correctCount / totalAnswered >= 0.7 ? '#16a34a' : correctCount / totalAnswered >= 0.5 ? '#d97706' : '#dc2626' }}>
-                          {Math.round((correctCount / totalAnswered) * 100)}%
+                      {a.status === 'complete' && totalQuestions > 0 && (
+                        <span className="text-xs font-bold" style={{ color: correctCount / totalQuestions >= 0.7 ? '#16a34a' : correctCount / totalQuestions >= 0.5 ? '#d97706' : '#dc2626' }}>
+                          {Math.round((correctCount / totalQuestions) * 100)}%
                         </span>
                       )}
                     </div>
                     <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                      {a.status === 'complete' ? `${correctCount}/${totalAnswered} correct` : 'Pending'}
+                      {a.status === 'complete' ? `${correctCount}/${totalQuestions} correct` : 'Pending'}
                       {a.status === 'complete' && totalTime > 0 && ` · ${Math.floor(totalTime / 60)}m ${totalTime % 60}s`}
                     </p>
 
