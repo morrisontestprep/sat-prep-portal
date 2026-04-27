@@ -77,13 +77,18 @@ export default function WorksheetView({
   const questionRefs       = useRef<Map<string, HTMLDivElement>>(new Map())
   const worksheetScrollRef = useRef<HTMLDivElement>(null)
 
-  // Scroll worksheet so active question is visible when explanation opens
+  // Scroll center panel so active question appears at the top (below sticky toolbar),
+  // keeping it parallel with the explanation editor which is always at the top of the left panel.
   useEffect(() => {
     if (!explanationOpenFor) return
-    const el = questionRefs.current.get(explanationOpenFor)
-    if (el) {
-      setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
-    }
+    setTimeout(() => {
+      const el        = questionRefs.current.get(explanationOpenFor)
+      const container = worksheetScrollRef.current
+      if (!el || !container) return
+      // Subtract sticky toolbar height (~52px) + a little breathing room
+      const TOOLBAR_H = 60
+      container.scrollTo({ top: Math.max(0, el.offsetTop - TOOLBAR_H), behavior: 'smooth' })
+    }, 50)
   }, [explanationOpenFor])
 
   // ── Resizable columns ─────────────────────────────────────────────────────
@@ -304,7 +309,7 @@ export default function WorksheetView({
       {/* ── LEFT: Explanation panel ─────────────────────────────────────── */}
       <div
         ref={leftPanelRef}
-        className="flex-shrink-0 flex flex-col overflow-hidden"
+        className="flex-shrink-0 flex flex-col overflow-y-auto"
         style={{ width: leftW, background: 'var(--background)' }}>
 
         {!selectedAssignmentId ? (
@@ -660,7 +665,7 @@ export default function WorksheetView({
       {/* ── RIGHT: Assignments sidebar ──────────────────────────────────── */}
       <aside
         ref={rightPanelRef}
-        className="flex-shrink-0 overflow-y-auto sticky top-0 h-screen p-4"
+        className="flex-shrink-0 overflow-y-auto p-4"
         style={{ width: rightW, background: 'var(--card)', borderColor: 'var(--border)' }}>
         <h2 className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>
           Assigned to

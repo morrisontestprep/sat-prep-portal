@@ -372,180 +372,230 @@ export default function TakeWorksheet({
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // COMPLETED: Full review view (scrollable worksheet with overlaid answers)
+  // COMPLETED: Side-by-side review (question on left, explanation on right)
+  // Navigate one question at a time, same as the active quiz.
   // ═══════════════════════════════════════════════════════════════════════════
   if (isComplete) {
-    const pct = totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 0
+    const pct       = totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 0
+    const reviewQ   = questionItems[currentIndex]?.questions
+    const reviewA   = reviewQ ? answers[reviewQ.id] : null
+    const reviewExp = reviewQ ? (explanations[reviewQ.id] ?? []) : []
+
     return (
-      <main className="flex-1 overflow-y-auto px-4 py-6">
-        <div className="max-w-2xl mx-auto">
-          {/* Score banner */}
-          <div className="flex items-center justify-between rounded-2xl border p-5 mb-6"
-            style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
-            <div>
-              <h1 className="text-lg font-bold" style={{ color: 'var(--foreground)' }}>{worksheetTitle}</h1>
-              <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                {attemptNumber > 1 ? `Attempt ${attemptNumber} · ` : ''}{correctCount}/{totalQuestions} correct
-              </p>
-            </div>
+      <main className="flex-1 flex flex-col" style={{ minHeight: 0 }}>
+
+        {/* ── Top bar (same style as active quiz) ───────────────────────── */}
+        <div className="border-b px-6 py-3 flex-shrink-0"
+          style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
+          <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-3">
-              <span className="text-2xl font-bold"
-                style={{ color: pct >= 70 ? '#16a34a' : pct >= 50 ? '#ca8a04' : '#dc2626' }}>
+              <p className="text-sm font-medium" style={{ color: 'var(--foreground)' }}>
+                {worksheetTitle}
+                {attemptNumber > 1 && (
+                  <span className="ml-2 text-xs font-normal px-2 py-0.5 rounded-full"
+                    style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
+                    Attempt {attemptNumber}
+                  </span>
+                )}
+              </p>
+              <span className="text-sm font-bold px-3 py-0.5 rounded-full"
+                style={{ color: pct >= 70 ? '#16a34a' : pct >= 50 ? '#ca8a04' : '#dc2626',
+                         background: pct >= 70 ? '#f0fdf4' : pct >= 50 ? '#fffbeb' : '#fef2f2' }}>
                 {pct}%
               </span>
+            </div>
+            <div className="flex items-center gap-2">
               <button onClick={handleRedo} disabled={redoing}
-                className="px-4 py-2 rounded-xl text-xs font-medium text-white"
+                className="px-4 py-1.5 rounded-xl text-xs font-medium text-white"
                 style={{ background: 'var(--accent)', opacity: redoing ? 0.6 : 1 }}>
                 {redoing ? 'Starting...' : 'Redo'}
               </button>
-              <a href="/my-assignments" className="px-4 py-2 rounded-xl text-xs font-medium border"
+              <a href="/my-assignments" className="px-4 py-1.5 rounded-xl text-xs font-medium border"
                 style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
                 Back
               </a>
             </div>
           </div>
-
-          {/* Questions with answers overlaid */}
-          <div className="space-y-5">
-            {items.map((item, idx) => {
-              if (item.type === 'section_header') {
-                return (
-                  <div key={item.id} className="pt-3">
-                    <h2 className="text-lg font-semibold" style={{ color: 'var(--foreground)' }}>{item.content}</h2>
-                  </div>
-                )
-              }
-              if (item.type === 'note') {
-                return (
-                  <div key={item.id} className="rounded-xl px-4 py-3 text-sm"
-                    style={{ background: '#fefce8', border: '1px solid #fde68a', color: '#713f12' }}>
-                    {item.content}
-                  </div>
-                )
-              }
-              if (item.type === 'question' && item.questions) {
-                const q = item.questions
-                const a = answers[q.id]
-                const qNum = questionItems.findIndex(i => i.id === item.id) + 1
-
-                return (
-                  <div key={item.id} className="rounded-2xl border overflow-hidden"
-                    style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
-                    {/* Question header with result */}
-                    <div className="flex items-center gap-3 px-4 py-3 border-b" style={{ borderColor: 'var(--border)' }}>
-                      <span className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0"
-                        style={{
-                          background: a?.isCorrect ? '#f0fdf4' : '#fef2f2',
-                          color: a?.isCorrect ? '#16a34a' : '#dc2626',
-                        }}>
-                        {a?.isCorrect ? '✓' : '✗'}
-                      </span>
-                      <span className="text-sm font-medium" style={{ color: 'var(--foreground)' }}>
-                        Question {qNum}
-                      </span>
-                      <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                        {q.domain} · {q.skill}
-                      </span>
-                      <div className="ml-auto flex items-center gap-2">
-                        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{a?.time ?? 0}s</span>
-                        <span className="text-xs px-2 py-0.5 rounded-full font-medium"
-                          style={{
-                            background: a?.isCorrect ? '#f0fdf4' : '#fef2f2',
-                            color: a?.isCorrect ? '#16a34a' : '#dc2626',
-                          }}>
-                          {a?.selected || '—'}{!a?.isCorrect && ` → ${q.correct_answer}`}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Question image */}
-                    <div className="px-4 pt-4 pb-2">
-                      <img src={q.question_image_url} alt={`Question ${qNum}`}
-                        className="w-full rounded-lg object-contain" style={{ maxHeight: 420, background: 'white' }} />
-                    </div>
-
-                    {/* Answer choices / free-response overlaid */}
-                    {isFreeResponse(q.correct_answer) ? (
-                      <div className="px-4 pb-3 flex flex-col gap-2">
-                        <div className="flex items-center gap-3 px-4 py-2.5 rounded-lg border text-sm font-medium"
-                          style={{
-                            background: a?.isCorrect ? '#f0fdf4' : '#fef2f2',
-                            borderColor: a?.isCorrect ? '#16a34a' : '#dc2626',
-                            color: a?.isCorrect ? '#16a34a' : '#dc2626',
-                          }}>
-                          <span className="font-bold">Your answer:</span>
-                          <span>{a?.selected || '—'}</span>
-                          <span className="text-xs">{a?.isCorrect ? '✓' : '✗'}</span>
-                        </div>
-                        {!a?.isCorrect && (
-                          <div className="flex items-center gap-3 px-4 py-2.5 rounded-lg border text-sm font-medium"
-                            style={{ background: '#f0fdf4', borderColor: '#16a34a', color: '#16a34a' }}>
-                            <span className="font-bold">Correct:</span>
-                            <span>{q.correct_answer}</span>
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="px-4 pb-3 grid grid-cols-4 gap-2">
-                        {CHOICES.map(choice => {
-                          const isSelected = a?.selected === choice
-                          const isCorrectAnswer = q.correct_answer === choice
-                          let bg = 'var(--background)'
-                          let border = 'var(--border)'
-                          let textColor = 'var(--foreground)'
-
-                          if (isCorrectAnswer) {
-                            bg = '#f0fdf4'; border = '#16a34a'; textColor = '#16a34a'
-                          } else if (isSelected) {
-                            bg = '#fef2f2'; border = '#dc2626'; textColor = '#dc2626'
-                          }
-
-                          return (
-                            <div key={choice}
-                              className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border text-sm font-medium"
-                              style={{ background: bg, borderColor: border, color: textColor }}>
-                              <span className="font-bold">{choice}</span>
-                              {isSelected && !isCorrectAnswer && <span className="text-xs">✗</span>}
-                              {isCorrectAnswer && <span className="text-xs">✓</span>}
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )}
-
-                    {/* Answer explanation */}
-                    {q.answer_image_url && (
-                      <div className="px-4 pb-4 border-t pt-3" style={{ borderColor: 'var(--border)' }}>
-                        <p className="text-xs font-medium mb-2" style={{ color: 'var(--text-muted)' }}>Explanation</p>
-                        <img src={q.answer_image_url} alt={`Answer ${qNum}`}
-                          className="w-full rounded-lg object-contain" style={{ maxHeight: 400, background: 'white' }} />
-                      </div>
-                    )}
-
-                    {/* Instructor explanation (if sent) */}
-                    {explanations[q.id] && explanations[q.id].length > 0 && (
-                      <ExplanationViewer steps={explanations[q.id]} />
-                    )}
-                  </div>
-                )
-              }
-              return null
+          {/* Question nav dots */}
+          <div className="flex items-center gap-1">
+            {questionItems.map((item, idx) => {
+              const a = answers[item.questions!.id]
+              const isCurrent = idx === currentIndex
+              return (
+                <button key={item.id} onClick={() => goToQuestion(idx)}
+                  className="flex-1 h-2 rounded-full transition-all"
+                  style={{
+                    background: a?.isCorrect ? '#16a34a' : a?.isCorrect === false ? '#dc2626' : 'var(--border)',
+                    opacity: isCurrent ? 1 : 0.5,
+                    outline: isCurrent ? '2px solid var(--accent)' : 'none',
+                    outlineOffset: '1px',
+                    minWidth: 4, maxWidth: 40,
+                  }}
+                  title={`Q${idx + 1}`}
+                />
+              )
             })}
           </div>
+        </div>
 
-          {/* Bottom actions */}
-          <div className="flex items-center justify-center gap-3 py-8">
-            <button onClick={handleRedo} disabled={redoing}
-              className="px-5 py-2.5 rounded-xl text-sm font-medium text-white"
-              style={{ background: 'var(--accent)', opacity: redoing ? 0.6 : 1 }}>
-              {redoing ? 'Starting...' : 'Redo Worksheet'}
-            </button>
-            <a href="/my-assignments" className="px-5 py-2.5 rounded-xl text-sm font-medium border"
+        {/* ── Two-column body ────────────────────────────────────────────── */}
+        {reviewQ && (
+          <div className="flex-1 flex overflow-hidden">
+
+            {/* LEFT: Question + answer result */}
+            <div className="flex-1 overflow-y-auto px-5 py-6">
+              {/* Question header */}
+              <div className="flex items-center gap-3 mb-4">
+                <span className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0"
+                  style={{
+                    background: reviewA?.isCorrect ? '#f0fdf4' : '#fef2f2',
+                    color:      reviewA?.isCorrect ? '#16a34a' : '#dc2626',
+                  }}>
+                  {reviewA?.isCorrect ? '✓' : '✗'}
+                </span>
+                <span className="text-sm font-semibold" style={{ color: 'var(--foreground)' }}>
+                  Question {currentIndex + 1}
+                </span>
+                <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  {reviewQ.domain} · {reviewQ.skill}
+                </span>
+                <span className="ml-auto text-xs" style={{ color: 'var(--text-muted)' }}>
+                  {reviewA?.time ?? 0}s
+                </span>
+              </div>
+
+              {/* Question image */}
+              <div className="rounded-2xl border overflow-hidden mb-4"
+                style={{ borderColor: 'var(--border)', background: 'white' }}>
+                <img src={reviewQ.question_image_url} alt={`Question ${currentIndex + 1}`}
+                  className="w-full object-contain" style={{ maxHeight: 420 }} />
+              </div>
+
+              {/* Answer result */}
+              {isFreeResponse(reviewQ.correct_answer) ? (
+                <div className="flex flex-col gap-2 mb-4">
+                  <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl border text-sm font-medium"
+                    style={{
+                      background:   reviewA?.isCorrect ? '#f0fdf4' : '#fef2f2',
+                      borderColor:  reviewA?.isCorrect ? '#16a34a' : '#dc2626',
+                      color:        reviewA?.isCorrect ? '#16a34a' : '#dc2626',
+                    }}>
+                    <span className="font-bold">Your answer:</span>
+                    <span>{reviewA?.selected || '—'}</span>
+                    <span>{reviewA?.isCorrect ? '✓' : '✗'}</span>
+                  </div>
+                  {!reviewA?.isCorrect && (
+                    <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl border text-sm font-medium"
+                      style={{ background: '#f0fdf4', borderColor: '#16a34a', color: '#16a34a' }}>
+                      <span className="font-bold">Correct:</span>
+                      <span>{reviewQ.correct_answer}</span>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="grid grid-cols-4 gap-2 mb-4">
+                  {CHOICES.map(choice => {
+                    const isSelected      = reviewA?.selected === choice
+                    const isCorrectAnswer = reviewQ.correct_answer === choice
+                    return (
+                      <div key={choice}
+                        className="flex items-center justify-center gap-1 px-3 py-2 rounded-xl border text-sm font-medium"
+                        style={{
+                          background:  isCorrectAnswer ? '#f0fdf4' : isSelected ? '#fef2f2' : 'var(--background)',
+                          borderColor: isCorrectAnswer ? '#16a34a' : isSelected ? '#dc2626' : 'var(--border)',
+                          color:       isCorrectAnswer ? '#16a34a' : isSelected ? '#dc2626' : 'var(--foreground)',
+                        }}>
+                        <span className="font-bold">{choice}</span>
+                        {isCorrectAnswer && <span className="text-xs">✓</span>}
+                        {isSelected && !isCorrectAnswer && <span className="text-xs">✗</span>}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              {/* Official answer explanation image */}
+              {reviewQ.answer_image_url && (
+                <div className="rounded-2xl border overflow-hidden"
+                  style={{ borderColor: 'var(--border)', background: 'white' }}>
+                  <div className="px-4 pt-3 pb-1 border-b" style={{ borderColor: 'var(--border)' }}>
+                    <p className="text-xs font-medium" style={{ color: 'var(--text-muted)' }}>Official explanation</p>
+                  </div>
+                  <img src={reviewQ.answer_image_url} alt="Answer explanation"
+                    className="w-full object-contain" style={{ maxHeight: 400, background: 'white' }} />
+                </div>
+              )}
+            </div>
+
+            {/* Divider */}
+            <div className="w-px flex-shrink-0" style={{ background: 'var(--border)' }} />
+
+            {/* RIGHT: Instructor explanation */}
+            <div className="overflow-y-auto" style={{ width: 340, flexShrink: 0, background: 'var(--background)' }}>
+              {reviewExp.length > 0 ? (
+                <div className="px-4 py-4 space-y-4">
+                  <p className="text-xs font-semibold uppercase tracking-wider"
+                    style={{ color: 'var(--text-muted)' }}>
+                    Instructor Explanation
+                  </p>
+                  {reviewExp.map((step, i) => (
+                    <div key={i} className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-semibold px-2 py-0.5 rounded-md"
+                          style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
+                          Step {i + 1}
+                        </span>
+                      </div>
+                      {step.text && (
+                        <p className="text-sm leading-relaxed" style={{ color: 'var(--foreground)' }}>
+                          {step.text}
+                        </p>
+                      )}
+                      {step.canvasData && (
+                        <img src={step.canvasData} alt={`Step ${i + 1} drawing`}
+                          className="w-full rounded-xl border object-contain"
+                          style={{ borderColor: 'var(--border)', background: 'white' }} />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="flex items-center justify-center h-full px-6 text-center">
+                  <div>
+                    <p className="text-sm font-medium" style={{ color: 'var(--text-muted)' }}>
+                      No explanation yet
+                    </p>
+                    <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                      Your instructor may add one later.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── Bottom nav (same as active quiz) ──────────────────────────── */}
+        <div className="border-t px-6 py-4 flex-shrink-0"
+          style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
+          <div className="max-w-3xl mx-auto flex items-center justify-between">
+            <button onClick={() => goToQuestion(currentIndex - 1)} disabled={currentIndex === 0}
+              className="px-4 py-2.5 rounded-xl text-sm font-medium border disabled:opacity-30"
               style={{ borderColor: 'var(--border)', color: 'var(--foreground)' }}>
-              Back to Assignments
-            </a>
+              ← Previous
+            </button>
+            <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
+              {currentIndex + 1} of {totalQuestions}
+            </span>
+            <button onClick={() => goToQuestion(currentIndex + 1)} disabled={currentIndex >= totalQuestions - 1}
+              className="px-4 py-2.5 rounded-xl text-sm font-medium border disabled:opacity-30"
+              style={{ borderColor: 'var(--border)', color: 'var(--foreground)' }}>
+              Next →
+            </button>
           </div>
         </div>
+
+        <DesmosCalculator />
       </main>
     )
   }

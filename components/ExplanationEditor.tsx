@@ -103,7 +103,15 @@ export default function ExplanationEditor({
   const updateText = (id: string, text: string) =>
     setSteps(prev => prev.map(s => s.id === id ? { ...s, text } : s))
   const toggleCanvas = (id: string) =>
-    setSteps(prev => prev.map(s => s.id === id ? { ...s, canvasOpen: !s.canvasOpen } : s))
+    setSteps(prev => prev.map(s => {
+      if (s.id !== id) return s
+      if (s.canvasOpen) {
+        // Closing — snapshot current canvas data so it survives unmount
+        const dataUrl = canvasRefs.current.get(id)?.getDataUrl() ?? undefined
+        return { ...s, canvasOpen: false, canvasData: dataUrl ?? s.canvasData }
+      }
+      return { ...s, canvasOpen: true }
+    }))
 
   // ── Reuse ─────────────────────────────────────────────────────────────────
   const loadExplanation = (exp: SavedExplanation) => {
@@ -121,8 +129,9 @@ export default function ExplanationEditor({
   const handleSend = async () => {
     setSending(true)
     const stepsData = steps.map(step => ({
-      text:      step.text,
-      canvasData: canvasRefs.current.get(step.id)?.getDataUrl() ?? null,
+      text:       step.text,
+      // If canvas is open use live data; if closed use snapshot saved when it was closed
+      canvasData: canvasRefs.current.get(step.id)?.getDataUrl() ?? step.canvasData ?? null,
     }))
     const nonEmpty = stepsData.filter(s => s.text.trim() || s.canvasData)
     if (nonEmpty.length === 0) {
