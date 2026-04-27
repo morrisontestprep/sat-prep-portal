@@ -6,6 +6,7 @@ import Image from 'next/image'
 import Link from 'next/link'
 import { createClient } from '@/utils/supabase/client'
 import type { WorksheetItemRaw, AssignmentRaw, StudentAnswerRaw } from './page'
+import DesmosCalculator from '@/components/DesmosCalculator'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type Question = {
@@ -663,6 +664,8 @@ export default function WorksheetView({
           </div>
         </div>
       )}
+
+      <DesmosCalculator />
     </div>
   )
 }

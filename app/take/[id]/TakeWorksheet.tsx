@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/utils/supabase/client'
 import { isFreeResponse, checkFreeResponse } from '@/utils/grading'
 import type { WorksheetItem, ExistingAnswer } from './page'
+import DesmosCalculator from '@/components/DesmosCalculator'
 
 type Props = {
   assignmentId: string
@@ -723,6 +724,8 @@ export default function TakeWorksheet({
           )}
         </div>
       </div>
+
+      <DesmosCalculator />
     </main>
   )
 }
