@@ -67,6 +67,34 @@ export default function TakeWorksheet({
   // Explanations keyed by question_id, fetched once the worksheet is complete
   const [explanations, setExplanations] = useState<Record<string, Array<{ text: string; canvasData: string | null }>>>({})
 
+  // Resizable explanation panel (review mode)
+  const [reviewPanelW, setReviewPanelW] = useState(360)
+  const reviewPanelWRef  = useRef(360)
+  const reviewPanelRef   = useRef<HTMLDivElement>(null)
+  const reviewResizing   = useRef(false)
+  const reviewResizeStartX = useRef(0)
+  const reviewResizeStartW = useRef(0)
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!reviewResizing.current) return
+      const dx = reviewResizeStartX.current - e.clientX  // dragging left = bigger
+      const w = Math.max(200, Math.min(700, reviewResizeStartW.current + dx))
+      reviewPanelWRef.current = w
+      if (reviewPanelRef.current) reviewPanelRef.current.style.width = `${w}px`
+    }
+    const onUp = () => {
+      if (!reviewResizing.current) return
+      reviewResizing.current = false
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      setReviewPanelW(reviewPanelWRef.current)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
+  }, [])
+
   const timerRef = useRef<Record<string, number>>({})
   const startTimeRef = useRef<number>(Date.now())
   const currentQIdRef = useRef<string | null>(null)
@@ -527,11 +555,26 @@ export default function TakeWorksheet({
               )}
             </div>
 
-            {/* Divider */}
-            <div className="w-px flex-shrink-0" style={{ background: 'var(--border)' }} />
+            {/* Drag handle — drag left to make explanation panel wider */}
+            <div
+              className="w-1.5 flex-shrink-0 hover:bg-blue-400 transition-colors cursor-col-resize"
+              style={{ background: 'var(--border)' }}
+              title="Drag to resize explanation panel"
+              onMouseDown={e => {
+                reviewResizing.current = true
+                reviewResizeStartX.current = e.clientX
+                reviewResizeStartW.current = reviewPanelWRef.current
+                document.body.style.cursor = 'col-resize'
+                document.body.style.userSelect = 'none'
+                e.preventDefault()
+              }}
+            />
 
-            {/* RIGHT: Instructor explanation */}
-            <div className="overflow-y-auto" style={{ width: 340, flexShrink: 0, background: 'var(--background)' }}>
+            {/* RIGHT: Instructor explanation (resizable) */}
+            <div
+              ref={reviewPanelRef}
+              className="overflow-y-auto flex-shrink-0"
+              style={{ width: reviewPanelW, background: 'var(--background)' }}>
               {reviewExp.length > 0 ? (
                 <div className="px-4 py-4 space-y-4">
                   <p className="text-xs font-semibold uppercase tracking-wider"
