@@ -19,7 +19,7 @@ export async function GET(request: Request) {
 
   const { data, error } = await supabase
     .from('question_explanations')
-    .select('id, steps, sent_at, created_at, student_id, profiles!student_id(full_name, email)')
+    .select('id, assignment_id, steps, sent_at, created_at, student_id, profiles!student_id(full_name, email)')
     .eq('question_id', questionId)
     .order('created_at', { ascending: false })
 
@@ -97,4 +97,29 @@ export async function POST(request: Request) {
   })
 
   return NextResponse.json({ ok: true, explanationId })
+}
+
+// ── DELETE /api/explanations ──────────────────────────────────────────────────
+// Body: { explanationId }
+export async function DELETE(request: Request) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+
+  const teacherEmail = process.env.TEACHER_EMAIL || 'morrisontestprep@gmail.com'
+  if (!user || user.email !== teacherEmail) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const body = await request.json()
+  const { explanationId } = body
+  if (!explanationId) return NextResponse.json({ error: 'explanationId required' }, { status: 400 })
+
+  const admin = createAdminClient()
+  const { error } = await admin
+    .from('question_explanations')
+    .delete()
+    .eq('id', explanationId)
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json({ ok: true })
 }

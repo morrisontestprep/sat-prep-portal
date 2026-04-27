@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
 import Link from 'next/link'
@@ -72,6 +72,19 @@ export default function WorksheetView({
   // Track which question has the explanation editor open (by question dbId)
   const [explanationOpenFor, setExplanationOpenFor] = useState<string | null>(null)
   const [sentExplanations, setSentExplanations] = useState<Set<string>>(new Set())
+
+  // Refs for scrolling worksheet to the active question
+  const questionRefs      = useRef<Map<string, HTMLDivElement>>(new Map())
+  const worksheetScrollRef = useRef<HTMLDivElement>(null)
+
+  // Scroll worksheet so active question is visible when explanation opens
+  useEffect(() => {
+    if (!explanationOpenFor) return
+    const el = questionRefs.current.get(explanationOpenFor)
+    if (el) {
+      setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
+    }
+  }, [explanationOpenFor])
 
   // Build a lookup for the selected student's answers
   const selectedAnswersMap: Record<string, StudentAnswerRaw> = {}
@@ -234,10 +247,86 @@ export default function WorksheetView({
 
   const questionCount = blocks.filter(b => b.type === 'question').length
 
+  // Derived data for the active explanation panel
+  const selAssignment = assignments.find(a => a.id === selectedAssignmentId)
+  const selStudent    = students.find(s => s.id === selAssignment?.student_id)
+  const activeQBlock  = explanationOpenFor
+    ? blocks.find(b => b.type === 'question' && b.question.id === explanationOpenFor)
+    : null
+  const activeQNum = explanationOpenFor
+    ? blocks.filter(b => b.type === 'question').findIndex(b => b.type === 'question' && b.question.id === explanationOpenFor) + 1
+    : 0
+
   return (
     <div className="flex-1 flex overflow-hidden">
-      {/* ── Document area ──────────────────────────────────────────────────── */}
-      <div className="flex-1 overflow-y-auto">
+
+      {/* ── LEFT: Explanation panel ─────────────────────────────────────── */}
+      <div className="w-80 xl:w-96 border-r flex-shrink-0 flex flex-col overflow-hidden"
+        style={{ background: 'var(--background)', borderColor: 'var(--border)' }}>
+
+        {!selectedAssignmentId ? (
+          <div className="flex-1 flex items-center justify-center p-6 text-center">
+            <div>
+              <svg className="w-8 h-8 mx-auto mb-3 opacity-20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                  d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+              </svg>
+              <p className="text-sm font-medium" style={{ color: 'var(--text-muted)' }}>Select a student</p>
+              <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                Click "Show on worksheet" in the sidebar, then click 💡 on any question.
+              </p>
+            </div>
+          </div>
+        ) : !explanationOpenFor ? (
+          <div className="flex-1 flex items-center justify-center p-6 text-center">
+            <div>
+              <p className="text-sm font-medium" style={{ color: 'var(--text-muted)' }}>
+                Click 💡 on any question
+              </p>
+              <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                The explanation editor will appear here alongside the question.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Active question indicator */}
+            <div className="flex items-center gap-2 px-4 py-2.5 border-b flex-shrink-0"
+              style={{ borderColor: 'var(--border)', background: 'var(--card)' }}>
+              <span className="text-xs font-semibold px-2 py-0.5 rounded-full flex-shrink-0"
+                style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
+                Q{activeQNum}
+              </span>
+              {activeQBlock?.type === 'question' && (
+                <span className="text-xs truncate flex-1" style={{ color: 'var(--text-muted)' }}>
+                  {activeQBlock.question.skill}
+                </span>
+              )}
+              <button onClick={() => setExplanationOpenFor(null)}
+                className="w-5 h-5 flex items-center justify-center flex-shrink-0"
+                style={{ color: 'var(--text-muted)' }}>
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            {selStudent && selAssignment && explanationOpenFor && (
+              <ExplanationEditor
+                questionId={explanationOpenFor}
+                assignmentId={selectedAssignmentId!}
+                studentId={selStudent.id}
+                studentName={selStudent.full_name || selStudent.email || 'student'}
+                worksheetTitle={title}
+                onSent={() => setSentExplanations(prev => new Set([...prev, explanationOpenFor!]))}
+                onClose={() => setExplanationOpenFor(null)}
+              />
+            )}
+          </>
+        )}
+      </div>
+
+      {/* ── CENTER: Worksheet document ──────────────────────────────────── */}
+      <div ref={worksheetScrollRef} className="flex-1 overflow-y-auto">
         {/* Sticky toolbar */}
         <div className="sticky top-0 z-10 border-b px-6 py-2.5 flex items-center justify-between gap-3"
           style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
@@ -268,7 +357,7 @@ export default function WorksheetView({
         </div>
 
         {/* Document */}
-        <div className="max-w-2xl mx-auto px-6 py-10">
+        <div className="px-5 py-8 max-w-2xl">
           {/* Editable title */}
           <div
             contentEditable
@@ -337,8 +426,17 @@ export default function WorksheetView({
 
                   {/* ── Question ──────────────────────────────────────── */}
                   {block.type === 'question' && (
-                    <div className="rounded-2xl border overflow-hidden my-2"
-                      style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
+                    <div
+                      ref={el => {
+                        if (el) questionRefs.current.set(block.question.id, el)
+                        else    questionRefs.current.delete(block.question.id)
+                      }}
+                      className="rounded-2xl border overflow-hidden my-2 transition-all"
+                      style={{
+                        background:  'var(--card)',
+                        borderColor: explanationOpenFor === block.question.id ? 'var(--accent)' : 'var(--border)',
+                        boxShadow:   explanationOpenFor === block.question.id ? '0 0 0 2px var(--accent)' : 'none',
+                      }}>
                       {/* Question header */}
                       <div className="flex items-center gap-3 px-4 py-2.5 border-b" style={{ borderColor: 'var(--border)' }}>
                         <span className="w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-semibold"
@@ -440,50 +538,30 @@ export default function WorksheetView({
                         </div>
                       )}
 
-                      {/* Explanation toolbar */}
+                      {/* Explain button — opens left panel */}
                       {selectedAssignmentId && (() => {
-                        const selAssignment = assignments.find(a => a.id === selectedAssignmentId)
-                        const selStudent = students.find(s => s.id === selAssignment?.student_id)
-                        const isOpen = explanationOpenFor === block.question.id
-                        const hasSent = sentExplanations.has(block.question.id)
+                        const isActive = explanationOpenFor === block.question.id
+                        const hasSent  = sentExplanations.has(block.question.id)
                         return (
-                          <>
-                            <div className="px-4 pb-3 border-t pt-3 flex items-center gap-2"
-                              style={{ borderColor: 'var(--border)' }}>
-                              <button
-                                onClick={() => setExplanationOpenFor(isOpen ? null : block.question.id)}
-                                className="text-xs px-3 py-1.5 rounded-lg border font-medium flex items-center gap-1.5"
-                                style={{
-                                  borderColor: isOpen ? 'var(--accent)' : 'var(--border)',
-                                  color:       isOpen ? 'var(--accent)' : 'var(--text-muted)',
-                                  background:  isOpen ? 'var(--accent-light)' : 'transparent',
-                                }}>
-                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                                    d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                                </svg>
-                                {isOpen ? 'Close explanation' : hasSent ? 'Edit explanation' : 'Add explanation'}
-                              </button>
-                              {hasSent && !isOpen && (
-                                <span className="text-xs px-2 py-0.5 rounded-full"
-                                  style={{ background: '#f0fdf4', color: '#16a34a' }}>
-                                  Sent ✓
-                                </span>
-                              )}
-                            </div>
-
-                            {isOpen && selStudent && selAssignment && (
-                              <ExplanationEditor
-                                questionId={block.question.id}
-                                assignmentId={selectedAssignmentId}
-                                studentId={selStudent.id}
-                                studentName={selStudent.full_name || selStudent.email || 'student'}
-                                worksheetTitle={title}
-                                onSent={() => setSentExplanations(prev => new Set([...prev, block.question.id]))}
-                                onClose={() => setExplanationOpenFor(null)}
-                              />
+                          <div className="px-4 pb-3 border-t pt-3 flex items-center gap-2"
+                            style={{ borderColor: 'var(--border)' }}>
+                            <button
+                              onClick={() => setExplanationOpenFor(isActive ? null : block.question.id)}
+                              className="text-xs px-3 py-1.5 rounded-lg border font-medium flex items-center gap-1.5 transition-colors"
+                              style={{
+                                borderColor: isActive ? 'var(--accent)' : 'var(--border)',
+                                color:       isActive ? 'var(--accent)' : 'var(--text-muted)',
+                                background:  isActive ? 'var(--accent-light)' : 'transparent',
+                              }}>
+                              💡 {isActive ? 'Editing ←' : hasSent ? 'Edit explanation' : 'Add explanation'}
+                            </button>
+                            {hasSent && !isActive && (
+                              <span className="text-xs px-2 py-0.5 rounded-full"
+                                style={{ background: '#f0fdf4', color: '#16a34a' }}>
+                                Sent ✓
+                              </span>
                             )}
-                          </>
+                          </div>
                         )
                       })()}
                     </div>
@@ -506,8 +584,8 @@ export default function WorksheetView({
         </div>
       </div>
 
-      {/* ── Right sidebar: Assignments (sticky) ─────────────────────────── */}
-      <aside className="w-72 border-l flex-shrink-0 overflow-y-auto sticky top-0 h-screen p-4"
+      {/* ── RIGHT: Assignments sidebar ──────────────────────────────────── */}
+      <aside className="w-60 border-l flex-shrink-0 overflow-y-auto sticky top-0 h-screen p-4"
         style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
         <h2 className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>
           Assigned to
