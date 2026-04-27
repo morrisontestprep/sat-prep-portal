@@ -1,18 +1,27 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/utils/supabase/server'
 import {
+  sendStudentSignupNotification,
   sendWorksheetSubmissionNotification,
   sendWorksheetAssignedNotification,
 } from '@/utils/email'
 
 export async function POST(request: Request) {
   try {
+    const body = await request.json()
+    const { type } = body
+
+    // Signup notifications come from auth/callback before a session exists,
+    // so we skip auth for this type only.
+    if (type === 'signup') {
+      const { studentName, studentEmail } = body
+      await sendStudentSignupNotification(studentName ?? '', studentEmail ?? '')
+      return NextResponse.json({ ok: true })
+    }
+
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-    const body = await request.json()
-    const { type } = body
 
     if (type === 'submission') {
       const { worksheetTitle, correctCount, totalQuestions, worksheetId } = body

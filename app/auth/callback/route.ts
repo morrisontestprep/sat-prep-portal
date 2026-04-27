@@ -2,7 +2,6 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
-import { sendStudentSignupNotification } from '@/utils/email'
 
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url)
@@ -54,7 +53,15 @@ export async function GET(request: NextRequest) {
           // Notify teacher of new student signup (only on first sign-in)
           if (!existingProfile && role === 'student') {
             try {
-              await sendStudentSignupNotification(fullName ?? '', user.email ?? '')
+              await fetch(`${origin}/api/notify`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  type: 'signup',
+                  studentName: fullName ?? '',
+                  studentEmail: user.email ?? '',
+                }),
+              })
             } catch (e) {
               console.error('Signup notification error:', e)
             }
