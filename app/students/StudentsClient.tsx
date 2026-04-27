@@ -2,7 +2,6 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { createClient } from '@/utils/supabase/client'
 
 type Assignment = {
   id: string
@@ -26,7 +25,6 @@ type Props = {
 }
 
 function StudentCard({ student, assignments, onDeleted }: { student: Student; assignments: Assignment[]; onDeleted: (id: string) => void }) {
-  const supabase = createClient()
   const [expanded, setExpanded] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -38,8 +36,12 @@ function StudentCard({ student, assignments, onDeleted }: { student: Student; as
 
   const handleDelete = async () => {
     setDeleting(true)
-    const { error } = await supabase.from('profiles').delete().eq('id', student.id)
-    if (error) {
+    const res = await fetch('/api/students', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ studentId: student.id }),
+    })
+    if (!res.ok) {
       alert('Failed to delete student. Please try again.')
       setDeleting(false)
       return
