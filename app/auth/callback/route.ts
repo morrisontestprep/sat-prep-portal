@@ -38,24 +38,33 @@ export async function GET(request: NextRequest) {
           const teacherEmail = process.env.TEACHER_EMAIL || 'morrisontestprep@gmail.com'
           const role = user.email === teacherEmail ? 'teacher' : 'student'
 
+          // Upsert the profile. On conflict (returning user) this is a no-op for
+          // signup_notified — the column is not included so its value is preserved.
           await supabase.from('profiles').upsert(
             { id: user.id, email: user.email, full_name: fullName, role },
             { onConflict: 'id' }
           )
 
-          // Detect first-ever sign-in by comparing created_at vs last_sign_in_at.
-          // A DB trigger may auto-create the profile row, so we can't rely on
-          // the profiles table to detect new users. Instead we use Supabase auth
-          // timestamps: on a first login they are identical (or within seconds).
-          const createdAt = new Date(user.created_at).getTime()
-          const lastSignIn = new Date(user.last_sign_in_at ?? user.created_at).getTime()
-          const isFirstLogin = Math.abs(lastSignIn - createdAt) < 60_000 // within 60 s
+          // Check the signup_notified flag. It starts as FALSE on any freshly
+          // created (or re-created after deletion) profile row. Once we send the
+          // notification we flip it to TRUE so it never fires again for that row.
+          const { data: profileRow } = await supabase
+            .from('profiles')
+            .select('signup_notified')
+            .eq('id', user.id)
+            .single()
 
-          console.log('[auth/callback] createdAt:', user.created_at, 'lastSignIn:', user.last_sign_in_at, 'isFirstLogin:', isFirstLogin, 'role:', role)
+          const needsNotification = role === 'student' && profileRow?.signup_notified === false
 
-          // Notify teacher of new student signup (only on first sign-in)
-          if (isFirstLogin && role === 'student') {
-            console.log('[auth/callback] Firing signup notification for', user.email)
+          console.log('[auth/callback] signup_notified:', profileRow?.signup_notified, 'needsNotification:', needsNotification)
+
+          if (needsNotification) {
+            // Mark as notified first so a retry can't double-fire
+            await supabase
+              .from('profiles')
+              .update({ signup_notified: true })
+              .eq('id', user.id)
+
             try {
               const notifyRes = await fetch(`${origin}/api/notify`, {
                 method: 'POST',
@@ -70,8 +79,6 @@ export async function GET(request: NextRequest) {
             } catch (e) {
               console.error('[auth/callback] Signup notification error:', e)
             }
-          } else {
-            console.log('[auth/callback] Skipping signup notification — isFirstLogin:', isFirstLogin, 'role:', role)
           }
         }
       } catch (e) {
