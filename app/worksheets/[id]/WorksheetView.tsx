@@ -7,6 +7,7 @@ import Link from 'next/link'
 import { createClient } from '@/utils/supabase/client'
 import type { WorksheetItemRaw, AssignmentRaw, StudentAnswerRaw } from './page'
 import DesmosCalculator from '@/components/DesmosCalculator'
+import ExplanationEditor from '@/components/ExplanationEditor'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type Question = {
@@ -68,6 +69,9 @@ export default function WorksheetView({
   const [assigning, setAssigning] = useState(false)
   const [expandedAssignment, setExpandedAssignment] = useState<string | null>(null)
   const [selectedAssignmentId, setSelectedAssignmentId] = useState<string | null>(null)
+  // Track which question has the explanation editor open (by question dbId)
+  const [explanationOpenFor, setExplanationOpenFor] = useState<string | null>(null)
+  const [sentExplanations, setSentExplanations] = useState<Set<string>>(new Set())
 
   // Build a lookup for the selected student's answers
   const selectedAnswersMap: Record<string, StudentAnswerRaw> = {}
@@ -435,6 +439,53 @@ export default function WorksheetView({
                           />
                         </div>
                       )}
+
+                      {/* Explanation toolbar */}
+                      {selectedAssignmentId && (() => {
+                        const selAssignment = assignments.find(a => a.id === selectedAssignmentId)
+                        const selStudent = students.find(s => s.id === selAssignment?.student_id)
+                        const isOpen = explanationOpenFor === block.question.id
+                        const hasSent = sentExplanations.has(block.question.id)
+                        return (
+                          <>
+                            <div className="px-4 pb-3 border-t pt-3 flex items-center gap-2"
+                              style={{ borderColor: 'var(--border)' }}>
+                              <button
+                                onClick={() => setExplanationOpenFor(isOpen ? null : block.question.id)}
+                                className="text-xs px-3 py-1.5 rounded-lg border font-medium flex items-center gap-1.5"
+                                style={{
+                                  borderColor: isOpen ? 'var(--accent)' : 'var(--border)',
+                                  color:       isOpen ? 'var(--accent)' : 'var(--text-muted)',
+                                  background:  isOpen ? 'var(--accent-light)' : 'transparent',
+                                }}>
+                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                    d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                                </svg>
+                                {isOpen ? 'Close explanation' : hasSent ? 'Edit explanation' : 'Add explanation'}
+                              </button>
+                              {hasSent && !isOpen && (
+                                <span className="text-xs px-2 py-0.5 rounded-full"
+                                  style={{ background: '#f0fdf4', color: '#16a34a' }}>
+                                  Sent ✓
+                                </span>
+                              )}
+                            </div>
+
+                            {isOpen && selStudent && selAssignment && (
+                              <ExplanationEditor
+                                questionId={block.question.id}
+                                assignmentId={selectedAssignmentId}
+                                studentId={selStudent.id}
+                                studentName={selStudent.full_name || selStudent.email || 'student'}
+                                worksheetTitle={title}
+                                onSent={() => setSentExplanations(prev => new Set([...prev, block.question.id]))}
+                                onClose={() => setExplanationOpenFor(null)}
+                              />
+                            )}
+                          </>
+                        )
+                      })()}
                     </div>
                   )}
 

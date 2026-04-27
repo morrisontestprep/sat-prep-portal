@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/utils/supabase/client'
+import NotificationBell from './NotificationBell'
 
 const teacherNav = [
   { href: '/dashboard', label: 'Dashboard', icon: (
@@ -85,6 +86,7 @@ export default function Nav({ userEmail }: { userEmail?: string }) {
       </div>
 
       <div className="flex items-center gap-3">
+        {!isTeacher && <NotificationBell />}
         {userEmail && (
           <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{userEmail}</span>
         )}

@@ -6,6 +6,7 @@ import { createClient } from '@/utils/supabase/client'
 import { isFreeResponse, checkFreeResponse } from '@/utils/grading'
 import type { WorksheetItem, ExistingAnswer } from './page'
 import DesmosCalculator from '@/components/DesmosCalculator'
+import ExplanationViewer from '@/components/ExplanationViewer'
 
 type Props = {
   assignmentId: string
@@ -63,6 +64,8 @@ export default function TakeWorksheet({
   const [redoing, setRedoing] = useState(false)
   const [justSubmitted, setJustSubmitted] = useState(false)
   const [freeResponseInput, setFreeResponseInput] = useState('')
+  // Explanations keyed by question_id, fetched once the worksheet is complete
+  const [explanations, setExplanations] = useState<Record<string, Array<{ text: string; canvasData: string | null }>>>({})
 
   const timerRef = useRef<Record<string, number>>({})
   const startTimeRef = useRef<number>(Date.now())
@@ -87,6 +90,29 @@ export default function TakeWorksheet({
       startTimeRef.current = Date.now()
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch instructor explanations once the assignment is complete
+  useEffect(() => {
+    if (!isComplete) return
+    const load = async () => {
+      try {
+        const { data } = await supabase
+          .from('question_explanations')
+          .select('question_id, steps')
+          .eq('student_id', studentId)
+          .not('sent_at', 'is', null)
+        if (!data) return
+        const map: Record<string, Array<{ text: string; canvasData: string | null }>> = {}
+        for (const row of data) {
+          map[row.question_id] = row.steps as Array<{ text: string; canvasData: string | null }>
+        }
+        setExplanations(map)
+      } catch (e) {
+        console.error('Failed to load explanations:', e)
+      }
+    }
+    load()
+  }, [isComplete, studentId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const flushTimer = useCallback(() => {
     const qId = currentQIdRef.current
@@ -494,6 +520,11 @@ export default function TakeWorksheet({
                         <img src={q.answer_image_url} alt={`Answer ${qNum}`}
                           className="w-full rounded-lg object-contain" style={{ maxHeight: 400, background: 'white' }} />
                       </div>
+                    )}
+
+                    {/* Instructor explanation (if sent) */}
+                    {explanations[q.id] && explanations[q.id].length > 0 && (
+                      <ExplanationViewer steps={explanations[q.id]} />
                     )}
                   </div>
                 )
