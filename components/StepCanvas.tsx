@@ -22,11 +22,12 @@ const PEN_COLORS = [
 ]
 
 const HIGHLIGHTER_COLORS = [
-  { label: 'Yellow',      value: 'rgba(253,224,71,0.18)'  },
-  { label: 'Light Blue',  value: 'rgba(125,211,252,0.18)' },
-  { label: 'Light Green', value: 'rgba(134,239,172,0.18)' },
-  { label: 'Pink',        value: 'rgba(253,164,175,0.18)' },
+  { label: 'Yellow',      value: '#fde047' },
+  { label: 'Light Blue',  value: '#7dd3fc' },
+  { label: 'Light Green', value: '#86efac' },
+  { label: 'Pink',        value: '#fda4af' },
 ]
+const HIGHLIGHT_OPACITY = 0.28  // applied once per stroke, never accumulates
 
 type ToolMode = 'pen' | 'highlighter' | 'eraser' | 'select'
 
@@ -90,7 +91,8 @@ const StepCanvas = forwardRef<StepCanvasRef, Props>(({ initialData }, ref) => {
   // ── Canvases ───────────────────────────────────────────────────────────────
   const bgRef   = useRef<HTMLCanvasElement>(null)   // white background
   const ssRef   = useRef<HTMLCanvasElement>(null)   // screenshot objects + handles
-  const drawRef = useRef<HTMLCanvasElement>(null)   // pen / highlighter strokes
+  const hlRef   = useRef<HTMLCanvasElement>(null)   // in-progress highlighter stroke (merged on mouseup)
+  const drawRef = useRef<HTMLCanvasElement>(null)   // committed pen / highlighter strokes
 
   // ── Tool state ─────────────────────────────────────────────────────────────
   const [tool,     setTool]     = useState<ToolMode>('pen')
@@ -300,27 +302,62 @@ const StepCanvas = forwardRef<StepCanvasRef, Props>(({ initialData }, ref) => {
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!isDrawing.current || !drawRef.current) return
     if (tool === 'select') return
-    const ctx = getDrawCtx()
-    if (!ctx) return
     const pos  = toCanvas(e, drawRef.current)
     const from = lastPos.current ?? pos
-    ctx.beginPath()
-    ctx.moveTo(from.x, from.y)
-    ctx.lineTo(pos.x, pos.y)
-    ctx.stroke()
-    lastPos.current    = pos
+
+    if (tool === 'highlighter') {
+      // Draw in-progress stroke to hlRef at full opacity — composited on mouseup
+      const hlCanvas = hlRef.current
+      if (!hlCanvas) return
+      const ctx = hlCanvas.getContext('2d')
+      if (!ctx) return
+      ctx.lineCap  = 'round'
+      ctx.lineJoin = 'round'
+      ctx.globalCompositeOperation = 'source-over'
+      ctx.strokeStyle = hlColor
+      ctx.lineWidth   = 22
+      ctx.globalAlpha = 1
+      ctx.beginPath()
+      ctx.moveTo(from.x, from.y)
+      ctx.lineTo(pos.x, pos.y)
+      ctx.stroke()
+    } else {
+      const ctx = getDrawCtx()
+      if (!ctx) return
+      ctx.beginPath()
+      ctx.moveTo(from.x, from.y)
+      ctx.lineTo(pos.x, pos.y)
+      ctx.stroke()
+    }
+
+    lastPos.current        = pos
     drawHasContent.current = true
-  }, [tool, getDrawCtx, toCanvas])
+  }, [tool, hlColor, getDrawCtx, toCanvas])
 
   const stopDrawing = useCallback(() => {
     if (isDrawing.current) {
       isDrawing.current = false
       lastPos.current   = null
+
+      // Merge in-progress highlighter stroke onto the committed draw canvas
+      if (tool === 'highlighter' && hlRef.current && drawRef.current) {
+        const drawCtx = drawRef.current.getContext('2d')
+        if (drawCtx) {
+          drawCtx.globalAlpha = HIGHLIGHT_OPACITY
+          drawCtx.globalCompositeOperation = 'source-over'
+          drawCtx.drawImage(hlRef.current, 0, 0)
+          drawCtx.globalAlpha = 1
+        }
+        // Clear the staging canvas
+        const hlCtx = hlRef.current.getContext('2d')
+        hlCtx?.clearRect(0, 0, CANVAS_W, CANVAS_H)
+      }
+
       const ctx = drawRef.current?.getContext('2d')
       if (ctx) ctx.globalCompositeOperation = 'source-over'
       if (drawHasContent.current) saveDrawSnapshot()
     }
-  }, [saveDrawSnapshot])
+  }, [tool, saveDrawSnapshot])
 
   // ── Global handlers: screenshot drag (works even outside canvas bounds) ────
   useEffect(() => {
@@ -462,9 +499,11 @@ const StepCanvas = forwardRef<StepCanvasRef, Props>(({ initialData }, ref) => {
         screenshotsRef.current = [ss]
         setScreenshots([ss])
         setSelectedSsId(null)
-        // Clear draw layer
-        const ctx = drawRef.current?.getContext('2d')
+        // Clear draw + highlight staging layers
+        const ctx   = drawRef.current?.getContext('2d')
+        const hlCtx = hlRef.current?.getContext('2d')
         ctx?.clearRect(0, 0, CANVAS_W, CANVAS_H)
+        hlCtx?.clearRect(0, 0, CANVAS_W, CANVAS_H)
         drawHistory.current      = []
         drawHistoryIndex.current = -1
         drawHasContent.current   = false
@@ -475,9 +514,11 @@ const StepCanvas = forwardRef<StepCanvasRef, Props>(({ initialData }, ref) => {
     clear() {
       const bgCtx   = bgRef.current?.getContext('2d')
       const ssCtx   = ssRef.current?.getContext('2d')
+      const hlCtx   = hlRef.current?.getContext('2d')
       const drawCtx = drawRef.current?.getContext('2d')
       bgCtx?.clearRect(0, 0, CANVAS_W, CANVAS_H)
       ssCtx?.clearRect(0, 0, CANVAS_W, CANVAS_H)
+      hlCtx?.clearRect(0, 0, CANVAS_W, CANVAS_H)
       drawCtx?.clearRect(0, 0, CANVAS_W, CANVAS_H)
       imgCache.current.clear()
       screenshotsRef.current   = []
@@ -592,7 +633,11 @@ const StepCanvas = forwardRef<StepCanvasRef, Props>(({ initialData }, ref) => {
         <canvas ref={ssRef} width={CANVAS_W} height={CANVAS_H}
           className="absolute inset-0 w-full h-full"
           style={{ pointerEvents: 'none' }} />
-        {/* 3. Drawing layer (receives all pointer events) */}
+        {/* 3. In-progress highlighter stroke preview (merged to drawRef on mouseup) */}
+        <canvas ref={hlRef} width={CANVAS_W} height={CANVAS_H}
+          className="absolute inset-0 w-full h-full"
+          style={{ pointerEvents: 'none', opacity: HIGHLIGHT_OPACITY }} />
+        {/* 4. Drawing layer (receives all pointer events) */}
         <canvas ref={drawRef} width={CANVAS_W} height={CANVAS_H}
           className="absolute inset-0 w-full h-full"
           style={{ cursor, touchAction: 'none' }}
