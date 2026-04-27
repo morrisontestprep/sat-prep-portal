@@ -661,8 +661,7 @@ export default function WorksheetView({
       <aside
         ref={rightPanelRef}
         className="flex-shrink-0 overflow-y-auto sticky top-0 h-screen p-4"
-        style={{ width: rightW }}
-        style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
+        style={{ width: rightW, background: 'var(--card)', borderColor: 'var(--border)' }}>
         <h2 className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>
           Assigned to
         </h2>
