@@ -57,6 +57,7 @@ export default function ExplanationEditor({
   const [alreadySent, setAlreadySent] = useState(false)
   const [currentExplanationId, setCurrentExplanationId] = useState<string | null>(null)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [showClearConfirm,  setShowClearConfirm]  = useState(false)
 
   const canvasRefs = useRef<Map<string, StepCanvasRef>>(new Map())
 
@@ -200,6 +201,11 @@ export default function ExplanationEditor({
               {showReusePicker ? 'Cancel' : `Reuse (${savedExplanations.length})`}
             </button>
           )}
+          <button onClick={() => setShowClearConfirm(true)}
+            className="text-xs px-2 py-1 rounded-lg border"
+            style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
+            Clear
+          </button>
           {alreadySent && currentExplanationId && (
             <button onClick={() => setShowDeleteConfirm(true)}
               className="text-xs px-2 py-1 rounded-lg border"
@@ -324,6 +330,41 @@ export default function ExplanationEditor({
           )}
         </div>
       </div>
+
+      {/* Clear confirmation */}
+      {showClearConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: 'rgba(0,0,0,0.5)' }}>
+          <div className="rounded-2xl shadow-2xl w-full max-w-sm p-6"
+            style={{ background: 'var(--card)' }}>
+            <h2 className="font-semibold mb-2" style={{ color: 'var(--foreground)' }}>
+              Clear and start over?
+            </h2>
+            <p className="text-sm mb-5" style={{ color: 'var(--text-muted)' }}>
+              This clears your current work in the editor. Any previously sent explanation will remain
+              unless you also press Delete.
+            </p>
+            <div className="flex gap-3">
+              <button onClick={() => setShowClearConfirm(false)}
+                className="flex-1 py-2.5 rounded-xl text-sm font-medium border"
+                style={{ borderColor: 'var(--border)', color: 'var(--foreground)' }}>
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  canvasRefs.current.clear()
+                  setSteps([makeStep()])
+                  setSent(false)
+                  setShowClearConfirm(false)
+                }}
+                className="flex-1 py-2.5 rounded-xl text-sm font-medium text-white"
+                style={{ background: 'var(--accent)' }}>
+                Clear
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Delete confirmation */}
       {showDeleteConfirm && (

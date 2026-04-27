@@ -74,7 +74,7 @@ export default function WorksheetView({
   const [sentExplanations, setSentExplanations] = useState<Set<string>>(new Set())
 
   // Refs for scrolling worksheet to the active question
-  const questionRefs      = useRef<Map<string, HTMLDivElement>>(new Map())
+  const questionRefs       = useRef<Map<string, HTMLDivElement>>(new Map())
   const worksheetScrollRef = useRef<HTMLDivElement>(null)
 
   // Scroll worksheet so active question is visible when explanation opens
@@ -85,6 +85,47 @@ export default function WorksheetView({
       setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
     }
   }, [explanationOpenFor])
+
+  // ── Resizable columns ─────────────────────────────────────────────────────
+  const [leftW,  setLeftW]  = useState(320)
+  const [rightW, setRightW] = useState(240)
+  const leftWRef  = useRef(320)
+  const rightWRef = useRef(240)
+  const leftPanelRef  = useRef<HTMLDivElement>(null)
+  const rightPanelRef = useRef<HTMLDivElement>(null)
+  const resizingCol   = useRef<'left' | 'right' | null>(null)
+  const resizeStartX  = useRef(0)
+  const resizeStartW  = useRef(0)
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!resizingCol.current) return
+      const dx = e.clientX - resizeStartX.current
+      if (resizingCol.current === 'left') {
+        const w = Math.max(240, Math.min(700, resizeStartW.current + dx))
+        leftWRef.current = w
+        if (leftPanelRef.current) leftPanelRef.current.style.width = `${w}px`
+      } else {
+        const w = Math.max(160, Math.min(420, resizeStartW.current - dx))
+        rightWRef.current = w
+        if (rightPanelRef.current) rightPanelRef.current.style.width = `${w}px`
+      }
+    }
+    const onUp = () => {
+      if (!resizingCol.current) return
+      if (resizingCol.current === 'left') setLeftW(leftWRef.current)
+      else setRightW(rightWRef.current)
+      resizingCol.current = null
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup',   onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup',   onUp)
+    }
+  }, [])
 
   // Build a lookup for the selected student's answers
   const selectedAnswersMap: Record<string, StudentAnswerRaw> = {}
@@ -261,8 +302,10 @@ export default function WorksheetView({
     <div className="flex-1 flex overflow-hidden">
 
       {/* ── LEFT: Explanation panel ─────────────────────────────────────── */}
-      <div className="w-80 xl:w-96 border-r flex-shrink-0 flex flex-col overflow-hidden"
-        style={{ background: 'var(--background)', borderColor: 'var(--border)' }}>
+      <div
+        ref={leftPanelRef}
+        className="flex-shrink-0 flex flex-col overflow-hidden"
+        style={{ width: leftW, background: 'var(--background)' }}>
 
         {!selectedAssignmentId ? (
           <div className="flex-1 flex items-center justify-center p-6 text-center">
@@ -324,6 +367,21 @@ export default function WorksheetView({
           </>
         )}
       </div>
+
+      {/* ── Drag handle: left ↔ center ──────────────────────────────────── */}
+      <div
+        onMouseDown={e => {
+          resizingCol.current  = 'left'
+          resizeStartX.current = e.clientX
+          resizeStartW.current = leftWRef.current
+          document.body.style.cursor     = 'col-resize'
+          document.body.style.userSelect = 'none'
+          e.preventDefault()
+        }}
+        className="w-1.5 flex-shrink-0 hover:bg-blue-400 transition-colors cursor-col-resize"
+        style={{ background: 'var(--border)' }}
+        title="Drag to resize"
+      />
 
       {/* ── CENTER: Worksheet document ──────────────────────────────────── */}
       <div ref={worksheetScrollRef} className="flex-1 overflow-y-auto">
@@ -584,8 +642,26 @@ export default function WorksheetView({
         </div>
       </div>
 
+      {/* ── Drag handle: center ↔ right ─────────────────────────────────── */}
+      <div
+        onMouseDown={e => {
+          resizingCol.current  = 'right'
+          resizeStartX.current = e.clientX
+          resizeStartW.current = rightWRef.current
+          document.body.style.cursor     = 'col-resize'
+          document.body.style.userSelect = 'none'
+          e.preventDefault()
+        }}
+        className="w-1.5 flex-shrink-0 hover:bg-blue-400 transition-colors cursor-col-resize"
+        style={{ background: 'var(--border)' }}
+        title="Drag to resize"
+      />
+
       {/* ── RIGHT: Assignments sidebar ──────────────────────────────────── */}
-      <aside className="w-60 border-l flex-shrink-0 overflow-y-auto sticky top-0 h-screen p-4"
+      <aside
+        ref={rightPanelRef}
+        className="flex-shrink-0 overflow-y-auto sticky top-0 h-screen p-4"
+        style={{ width: rightW }}
         style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
         <h2 className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>
           Assigned to

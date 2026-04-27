@@ -22,10 +22,10 @@ const PEN_COLORS = [
 ]
 
 const HIGHLIGHTER_COLORS = [
-  { label: 'Yellow',     value: 'rgba(253,224,71,0.45)'  },
-  { label: 'Light Blue', value: 'rgba(125,211,252,0.45)' },
-  { label: 'Light Green', value: 'rgba(134,239,172,0.45)' },
-  { label: 'Pink',       value: 'rgba(253,164,175,0.45)' },
+  { label: 'Yellow',      value: 'rgba(253,224,71,0.18)'  },
+  { label: 'Light Blue',  value: 'rgba(125,211,252,0.18)' },
+  { label: 'Light Green', value: 'rgba(134,239,172,0.18)' },
+  { label: 'Pink',        value: 'rgba(253,164,175,0.18)' },
 ]
 
 type ToolMode = 'pen' | 'highlighter' | 'eraser' | 'select'
