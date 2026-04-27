@@ -53,7 +53,11 @@ export async function GET(request: NextRequest) {
 
           // Notify teacher of new student signup (only on first sign-in)
           if (!existingProfile && role === 'student') {
-            sendStudentSignupNotification(fullName ?? '', user.email ?? '').catch(console.error)
+            try {
+              await sendStudentSignupNotification(fullName ?? '', user.email ?? '')
+            } catch (e) {
+              console.error('Signup notification error:', e)
+            }
           }
         }
       } catch (e) {
