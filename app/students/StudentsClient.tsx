@@ -113,6 +113,15 @@ function StudentCard({ student, assignments, onDeleted }: { student: Student; as
             </svg>
           )}
 
+          {/* Analytics button */}
+          <Link
+            href={`/students/${student.id}/analytics`}
+            onClick={e => e.stopPropagation()}
+            className="text-xs px-2.5 py-1 rounded-lg font-medium flex-shrink-0"
+            style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
+            Analytics
+          </Link>
+
           {/* Delete button */}
           <button
             onClick={e => { e.stopPropagation(); setShowDeleteConfirm(true) }}
