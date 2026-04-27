@@ -39,11 +39,13 @@ export async function GET(request: NextRequest) {
           const role = user.email === teacherEmail ? 'teacher' : 'student'
 
           // Check if this is a brand-new student (no existing profile)
-          const { data: existingProfile } = await supabase
+          const { data: existingProfile, error: profileLookupError } = await supabase
             .from('profiles')
             .select('id')
             .eq('id', user.id)
             .maybeSingle()
+
+          console.log('[auth/callback] existingProfile:', existingProfile, 'lookupError:', profileLookupError, 'role:', role)
 
           await supabase.from('profiles').upsert(
             { id: user.id, email: user.email, full_name: fullName, role },
@@ -52,8 +54,9 @@ export async function GET(request: NextRequest) {
 
           // Notify teacher of new student signup (only on first sign-in)
           if (!existingProfile && role === 'student') {
+            console.log('[auth/callback] Firing signup notification for', user.email)
             try {
-              await fetch(`${origin}/api/notify`, {
+              const notifyRes = await fetch(`${origin}/api/notify`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -62,9 +65,12 @@ export async function GET(request: NextRequest) {
                   studentEmail: user.email ?? '',
                 }),
               })
+              console.log('[auth/callback] Notify response status:', notifyRes.status)
             } catch (e) {
-              console.error('Signup notification error:', e)
+              console.error('[auth/callback] Signup notification error:', e)
             }
+          } else {
+            console.log('[auth/callback] Skipping signup notification — existingProfile:', !!existingProfile, 'role:', role)
           }
         }
       } catch (e) {
