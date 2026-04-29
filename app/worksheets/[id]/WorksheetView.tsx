@@ -73,6 +73,20 @@ export default function WorksheetView({
   const [explanationOpenFor, setExplanationOpenFor] = useState<string | null>(null)
   const [sentExplanations, setSentExplanations] = useState<Set<string>>(new Set())
 
+  // ── Overlay filter state (only meaningful when a student is overlaid) ────────
+  const [filterCorrectness, setFilterCorrectness]   = useState<'all' | 'correct' | 'wrong'>('all')
+  const [filterDifficulties, setFilterDifficulties] = useState<Set<string>>(new Set())
+  const [filterTime, setFilterTime] = useState<{ enabled: boolean; direction: 'gt' | 'lt'; seconds: number }>(
+    { enabled: false, direction: 'gt', seconds: 60 }
+  )
+
+  // Reset filters whenever the student overlay changes
+  useEffect(() => {
+    setFilterCorrectness('all')
+    setFilterDifficulties(new Set())
+    setFilterTime({ enabled: false, direction: 'gt', seconds: 60 })
+  }, [selectedAssignmentId])
+
   // Refs for scrolling worksheet to the active question
   const questionRefs       = useRef<Map<string, HTMLDivElement>>(new Map())
   const worksheetScrollRef = useRef<HTMLDivElement>(null)
@@ -157,6 +171,30 @@ export default function WorksheetView({
       selectedAnswersMap[sa.question_id] = sa
     })
   }
+
+  // ── Filter helper ────────────────────────────────────────────────────────────
+  const blockPassesFilter = (block: Block): boolean => {
+    if (!selectedAssignmentId) return true
+    if (block.type !== 'question') return true
+    const sa = selectedAnswersMap[block.question.id]
+    if (filterCorrectness === 'correct' && (!sa || !sa.is_correct)) return false
+    if (filterCorrectness === 'wrong'   && (!sa ||  sa.is_correct)) return false
+    if (filterDifficulties.size > 0 && !filterDifficulties.has(block.question.difficulty)) return false
+    if (filterTime.enabled) {
+      const t = sa?.time_spent_seconds ?? null
+      if (t === null) return false
+      if (filterTime.direction === 'gt' && t <= filterTime.seconds) return false
+      if (filterTime.direction === 'lt' && t >= filterTime.seconds) return false
+    }
+    return true
+  }
+
+  const anyFilterActive = !!selectedAssignmentId && (
+    filterCorrectness !== 'all' || filterDifficulties.size > 0 || filterTime.enabled
+  )
+  const filteredQuestionCount = selectedAssignmentId
+    ? blocks.filter(b => b.type === 'question' && blockPassesFilter(b)).length
+    : questionCount
 
   // Inline "add block" picker state
   const [addMenu, setAddMenu]     = useState<string | null>(null) // localId of block to insert after, or 'top'
@@ -426,32 +464,143 @@ export default function WorksheetView({
       {/* ── CENTER: Worksheet document ──────────────────────────────────── */}
       <div ref={worksheetScrollRef} className="flex-1 overflow-y-auto">
         {/* Sticky toolbar */}
-        <div className="sticky top-0 z-10 border-b px-6 py-2.5 flex items-center justify-between gap-3"
+        <div className="sticky top-0 z-10 border-b flex flex-col"
           style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
-          <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--text-muted)' }}>
-            <Link href="/worksheets" className="hover:underline">Worksheets</Link>
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-            </svg>
-            <span className="truncate max-w-48" style={{ color: 'var(--foreground)' }}>{title || 'Untitled'}</span>
-          </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{questionCount} question{questionCount !== 1 ? 's' : ''}</span>
-            {saved && <span className="text-xs" style={{ color: '#16a34a' }}>Saved ✓</span>}
-            <button onClick={save} disabled={saving}
-              className="px-3 py-1.5 rounded-lg text-sm border disabled:opacity-50"
-              style={{ borderColor: 'var(--border)', color: 'var(--foreground)' }}>
-              {saving ? 'Saving…' : 'Save'}
-            </button>
-            <button onClick={() => setShowAssign(true)}
-              className="px-3 py-1.5 rounded-lg text-sm font-medium text-white flex items-center gap-1.5"
-              style={{ background: 'var(--accent)' }}>
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+
+          {/* Row 1: breadcrumb + actions */}
+          <div className="px-6 py-2.5 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--text-muted)' }}>
+              <Link href="/worksheets" className="hover:underline">Worksheets</Link>
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
               </svg>
-              Assign
-            </button>
+              <span className="truncate max-w-48" style={{ color: 'var(--foreground)' }}>{title || 'Untitled'}</span>
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{questionCount} question{questionCount !== 1 ? 's' : ''}</span>
+              {saved && <span className="text-xs" style={{ color: '#16a34a' }}>Saved ✓</span>}
+              <button onClick={save} disabled={saving}
+                className="px-3 py-1.5 rounded-lg text-sm border disabled:opacity-50"
+                style={{ borderColor: 'var(--border)', color: 'var(--foreground)' }}>
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+              <button onClick={() => setShowAssign(true)}
+                className="px-3 py-1.5 rounded-lg text-sm font-medium text-white flex items-center gap-1.5"
+                style={{ background: 'var(--accent)' }}>
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+                </svg>
+                Assign
+              </button>
+            </div>
           </div>
+
+          {/* Row 2: Filter bar — only when a student overlay is active */}
+          {selectedAssignmentId && (
+            <div className="px-4 pb-2.5 pt-1 flex items-center gap-2 flex-wrap border-t"
+              style={{ borderColor: 'var(--border)' }}>
+
+              {/* Correctness filter */}
+              <div className="flex items-center gap-1">
+                {(['all', 'correct', 'wrong'] as const).map(f => (
+                  <button key={f}
+                    onClick={() => setFilterCorrectness(f)}
+                    className="text-xs px-2.5 py-1 rounded-lg border transition-colors"
+                    style={{
+                      borderColor: filterCorrectness === f ? 'var(--accent)' : 'var(--border)',
+                      color:       filterCorrectness === f ? 'var(--accent)' : 'var(--text-muted)',
+                      background:  filterCorrectness === f ? 'var(--accent-light)' : 'transparent',
+                      fontWeight:  filterCorrectness === f ? 600 : 400,
+                    }}>
+                    {f === 'all' ? 'All' : f === 'correct' ? '✓ Correct' : '✗ Wrong'}
+                  </button>
+                ))}
+              </div>
+
+              <div className="w-px h-4 flex-shrink-0" style={{ background: 'var(--border)' }} />
+
+              {/* Difficulty filter */}
+              <div className="flex items-center gap-1">
+                {(['Easy', 'Medium', 'Hard'] as const).map(d => {
+                  const active = filterDifficulties.has(d)
+                  return (
+                    <button key={d}
+                      onClick={() => setFilterDifficulties(prev => {
+                        const next = new Set(prev)
+                        if (next.has(d)) next.delete(d); else next.add(d)
+                        return next
+                      })}
+                      className="text-xs px-2.5 py-1 rounded-lg border transition-colors"
+                      style={{
+                        borderColor: active ? diffCol(d) : 'var(--border)',
+                        color:       active ? diffCol(d) : 'var(--text-muted)',
+                        background:  active ? diffBg(d)  : 'transparent',
+                        fontWeight:  active ? 600 : 400,
+                      }}>
+                      {d}
+                    </button>
+                  )
+                })}
+              </div>
+
+              <div className="w-px h-4 flex-shrink-0" style={{ background: 'var(--border)' }} />
+
+              {/* Time filter */}
+              <div className="flex items-center gap-2">
+                <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={filterTime.enabled}
+                    onChange={e => setFilterTime(prev => ({ ...prev, enabled: e.target.checked }))}
+                    className="w-3.5 h-3.5"
+                    style={{ accentColor: 'var(--accent)' }}
+                  />
+                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}>⏱ Time</span>
+                </label>
+                {filterTime.enabled && (
+                  <>
+                    <button
+                      onClick={() => setFilterTime(prev => ({ ...prev, direction: prev.direction === 'gt' ? 'lt' : 'gt' }))}
+                      className="text-xs px-2 py-0.5 rounded border font-mono font-bold flex-shrink-0"
+                      style={{ borderColor: 'var(--border)', color: 'var(--accent)', background: 'var(--accent-light)', minWidth: 26 }}>
+                      {filterTime.direction === 'gt' ? '>' : '<'}
+                    </button>
+                    <input
+                      type="range"
+                      min={5} max={300} step={5}
+                      value={filterTime.seconds}
+                      onChange={e => setFilterTime(prev => ({ ...prev, seconds: Number(e.target.value) }))}
+                      className="w-24"
+                      style={{ accentColor: 'var(--accent)' }}
+                    />
+                    <span className="text-xs font-mono w-10 flex-shrink-0" style={{ color: 'var(--foreground)' }}>
+                      {filterTime.seconds}s
+                    </span>
+                  </>
+                )}
+              </div>
+
+              {/* Count + reset */}
+              {anyFilterActive && (
+                <>
+                  <div className="w-px h-4 flex-shrink-0" style={{ background: 'var(--border)' }} />
+                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    {filteredQuestionCount} of {questionCount} shown
+                  </span>
+                  <button
+                    onClick={() => {
+                      setFilterCorrectness('all')
+                      setFilterDifficulties(new Set())
+                      setFilterTime({ enabled: false, direction: 'gt', seconds: 60 })
+                    }}
+                    className="text-xs px-2 py-0.5 rounded border"
+                    style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
+                    Reset
+                  </button>
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Document */}
@@ -483,6 +632,9 @@ export default function WorksheetView({
               const isFirst = idx === 0
               const isLast  = idx === blocks.length - 1
               const qNum    = blocks.slice(0, idx + 1).filter(b => b.type === 'question').length
+
+              // Hide question blocks that don't pass the active overlay filters
+              if (block.type === 'question' && !blockPassesFilter(block)) return null
 
               return (
                 <div key={block.localId} className="group relative">
