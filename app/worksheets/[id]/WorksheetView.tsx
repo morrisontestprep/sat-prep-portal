@@ -125,6 +125,7 @@ export default function WorksheetView({
   }, [editorTopOffset])
 
   // ── Resizable columns + right-panel collapse ─────────────────────────────
+  const [leftCollapsed,  setLeftCollapsed]  = useState(false)
   const [rightCollapsed, setRightCollapsed] = useState(false)
   const [leftW,  setLeftW]  = useState(320)
   const [rightW, setRightW] = useState(240)
@@ -367,12 +368,42 @@ export default function WorksheetView({
     <div className="flex-1 flex overflow-hidden">
 
       {/* ── LEFT: Explanation panel ─────────────────────────────────────── */}
-      {/* overflow-y-auto so the spacer can push the editor to the right vertical
-          position, then sticky top-0 keeps the editor visible while scrolling.  */}
-      <div
-        ref={leftPanelRef}
-        className="flex-shrink-0 overflow-y-auto"
-        style={{ width: leftW, background: 'var(--background)' }}>
+      {leftCollapsed ? (
+        /* Collapsed strip — click to expand */
+        <div
+          className="flex-shrink-0 flex flex-col items-center justify-start pt-3 border-r cursor-pointer select-none"
+          style={{ width: 32, background: 'var(--card)', borderColor: 'var(--border)' }}
+          onClick={() => setLeftCollapsed(false)}
+          title="Expand explanation panel">
+          <div className="text-xs font-semibold mt-2"
+            style={{ writingMode: 'vertical-rl', color: 'var(--text-muted)', transform: 'rotate(180deg)', letterSpacing: '0.05em' }}>
+            Explanation ▸
+          </div>
+        </div>
+      ) : (
+      <div className="flex-shrink-0 flex flex-col" style={{ width: leftW, background: 'var(--background)' }}>
+
+        {/* Header with collapse button */}
+        <div className="flex items-center justify-between px-4 py-2.5 border-b flex-shrink-0"
+          style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
+          <h2 className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+            Add Explanation
+          </h2>
+          <button
+            onClick={() => setLeftCollapsed(true)}
+            title="Collapse panel"
+            className="w-5 h-5 flex items-center justify-center rounded hover:opacity-70"
+            style={{ color: 'var(--text-muted)' }}>
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Scrollable content — ref stays here for scroll-sync */}
+        <div
+          ref={leftPanelRef}
+          className="flex-1 overflow-y-auto">
 
         {(!selectedAssignmentId || !explanationOpenFor) ? (
           /* Placeholder — vertically centred in the panel */
@@ -430,7 +461,7 @@ export default function WorksheetView({
 
               {/* Editor — give it a defined height so its internal scroll works */}
               {selStudent && selAssignment && (
-                <div className="flex flex-col" style={{ height: 'calc(100vh - 88px)' }}>
+                <div className="flex flex-col" style={{ height: 'calc(100vh - 132px)' }}>
                   <ExplanationEditor
                     questionId={explanationOpenFor}
                     assignmentId={selectedAssignmentId!}
@@ -448,9 +479,12 @@ export default function WorksheetView({
             <div style={{ height: '100vh' }} />
           </>
         )}
-      </div>
+        </div> {/* end scrollable inner div */}
+      </div>  {/* end expanded left panel */}
+      )}      {/* end leftCollapsed conditional */}
 
       {/* ── Drag handle: left ↔ center ──────────────────────────────────── */}
+      {!leftCollapsed && (
       <div
         onMouseDown={e => {
           resizingCol.current  = 'left'
@@ -464,6 +498,7 @@ export default function WorksheetView({
         style={{ background: 'var(--border)' }}
         title="Drag to resize"
       />
+      )}
 
       {/* ── CENTER: Worksheet document ──────────────────────────────────── */}
       <div ref={worksheetScrollRef} className="flex-1 overflow-y-auto">
@@ -640,7 +675,7 @@ export default function WorksheetView({
         </div>
 
         {/* Document */}
-        <div className="px-5 py-8 max-w-2xl">
+        <div className="px-5 py-8">
           {/* Editable title */}
           <div
             contentEditable
@@ -832,7 +867,10 @@ export default function WorksheetView({
                           <div className="px-4 pb-3 border-t pt-3 flex items-center gap-2"
                             style={{ borderColor: 'var(--border)' }}>
                             <button
-                              onClick={() => setExplanationOpenFor(isActive ? null : block.question.id)}
+                              onClick={() => {
+                                if (!isActive) setLeftCollapsed(false)
+                                setExplanationOpenFor(isActive ? null : block.question.id)
+                              }}
                               className="text-xs px-3 py-1.5 rounded-lg border font-medium flex items-center gap-1.5 transition-colors"
                               style={{
                                 borderColor: isActive ? 'var(--accent)' : 'var(--border)',
