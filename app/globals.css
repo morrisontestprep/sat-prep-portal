@@ -27,6 +27,10 @@ body {
   pointer-events: none;
 }
 
+/* Image selection ring inside master-file editor */
+.master-file-editor img { cursor: pointer; }
+.master-file-editor img.mf-selected { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
 /* Prose styles for the master-file editor and student notes view */
 .master-file-content h1 { font-size: 1.6rem; font-weight: 700; margin: 1rem 0 0.5rem; }
 .master-file-content h2 { font-size: 1.25rem; font-weight: 600; margin: 0.9rem 0 0.4rem; }

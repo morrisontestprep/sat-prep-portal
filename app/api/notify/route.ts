@@ -4,6 +4,8 @@ import {
   sendStudentSignupNotification,
   sendWorksheetSubmissionNotification,
   sendWorksheetAssignedNotification,
+  sendNotesUpdatedNotification,
+  sendStudentCommentNotification,
 } from '@/utils/email'
 
 export async function POST(request: Request) {
@@ -64,6 +66,18 @@ export async function POST(request: Request) {
           )
         )
       )
+      return NextResponse.json({ ok: true })
+    }
+
+    if (type === 'notes_updated') {
+      const { studentEmail, studentName } = body
+      await sendNotesUpdatedNotification(studentEmail, studentName)
+      return NextResponse.json({ ok: true })
+    }
+
+    if (type === 'student_comment') {
+      const { studentName, commentText, quotedText } = body
+      await sendStudentCommentNotification(studentName, commentText, quotedText ?? null)
       return NextResponse.json({ ok: true })
     }
 

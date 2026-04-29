@@ -8,6 +8,7 @@ export type NoteComment = {
   author_id: string
   author_name: string
   content: string
+  quoted_text: string | null
   created_at: string
 }
 

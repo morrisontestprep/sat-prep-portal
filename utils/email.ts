@@ -86,6 +86,63 @@ export async function sendWorksheetSubmissionNotification(
   })
 }
 
+// ── Notify student: teacher updated their master file ────────────────────────
+export async function sendNotesUpdatedNotification(
+  studentEmail: string,
+  studentName: string,
+) {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://sat-prep-portal.vercel.app'
+  await transporter.sendMail({
+    from: `"Morrison Test Prep" <${TEACHER_EMAIL}>`,
+    to: studentEmail,
+    subject: 'Your tutor updated your Notes',
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto">
+        <h2 style="color:#4f46e5">Notes Updated</h2>
+        <p>Hi ${studentName || 'there'},</p>
+        <p>Your tutor just updated your Master File with new notes. Head over to review them and leave any questions as comments.</p>
+        <a href="${appUrl}/notes"
+          style="display:inline-block;background:#4f46e5;color:white;padding:10px 20px;border-radius:8px;text-decoration:none;font-size:14px;margin-top:8px">
+          View Notes
+        </a>
+        <p style="color:#9ca3af;font-size:12px;margin-top:24px">Morrison Test Prep &middot; <a href="${appUrl}" style="color:#9ca3af">${appUrl}</a></p>
+      </div>
+    `,
+  })
+}
+
+// ── Notify teacher: student left a comment ────────────────────────────────────
+export async function sendStudentCommentNotification(
+  studentName: string,
+  commentText: string,
+  quotedText: string | null,
+) {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://sat-prep-portal.vercel.app'
+  const quoteBlock = quotedText
+    ? `<blockquote style="border-left:3px solid #4f46e5;margin:12px 0;padding:6px 12px;color:#6b7280;font-style:italic">&ldquo;${quotedText}&rdquo;</blockquote>`
+    : ''
+  await transporter.sendMail({
+    from: `"Morrison Test Prep" <${TEACHER_EMAIL}>`,
+    to: TEACHER_EMAIL,
+    subject: `${studentName || 'A student'} left a comment on their Master File`,
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto">
+        <h2 style="color:#4f46e5">New Student Comment</h2>
+        <p><strong>${studentName || 'A student'}</strong> commented on their Master File:</p>
+        ${quoteBlock}
+        <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:12px;margin:12px 0">
+          <p style="margin:0;font-size:15px">${commentText}</p>
+        </div>
+        <a href="${appUrl}/students"
+          style="display:inline-block;background:#4f46e5;color:white;padding:10px 20px;border-radius:8px;text-decoration:none;font-size:14px">
+          Open Master File
+        </a>
+        <p style="color:#9ca3af;font-size:12px;margin-top:24px">Morrison Test Prep &middot; <a href="${appUrl}" style="color:#9ca3af">${appUrl}</a></p>
+      </div>
+    `,
+  })
+}
+
 // ── Notify student: worksheet assigned ───────────────────────────────────────
 export async function sendWorksheetAssignedNotification(
   studentEmail: string,
