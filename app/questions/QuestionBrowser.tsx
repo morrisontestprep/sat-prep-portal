@@ -18,6 +18,8 @@ type Question = {
   answer_image_url: string
 }
 
+type Student = { id: string; full_name: string | null; email: string | null }
+
 type Filters = {
   subject: string
   domain: string
@@ -84,6 +86,14 @@ export default function QuestionBrowser({
   // Per-question tags: { [questionId]: Tag[] }
   const [questionTags, setQuestionTags] = useState<Record<string, Tag[]>>({})
 
+  // Students (fetched once for "not assigned to" filter)
+  const [allStudents, setAllStudents] = useState<Student[]>([])
+  // "Not assigned to" filter — set of student IDs whose questions are excluded
+  const [notAssignedTo, setNotAssignedTo] = useState<Set<string>>(new Set())
+  const [excludedQids, setExcludedQids] = useState<string[]>([])
+  const [loadingExcluded, setLoadingExcluded] = useState(false)
+  const [notAssignedOpen, setNotAssignedOpen] = useState(true)
+
   // ── UI state ───────────────────────────────────────────────────────────────
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [expandedId, setExpandedId] = useState<string | null>(null)
@@ -144,8 +154,49 @@ export default function QuestionBrowser({
       .then(({ data }) => setAllTags(data ?? []))
   }, [supabase])
 
+  // ── Fetch all students once ────────────────────────────────────────────────
+  useEffect(() => {
+    supabase.from('profiles').select('id, full_name, email').eq('role', 'student').order('full_name')
+      .then(({ data }) => setAllStudents(data ?? []))
+  }, [supabase])
+
+  // ── Compute excluded question IDs when "not assigned to" filter changes ────
+  useEffect(() => {
+    if (notAssignedTo.size === 0) { setExcludedQids([]); return }
+
+    const studentIds = Array.from(notAssignedTo)
+    let cancelled = false
+    setLoadingExcluded(true)
+
+    ;(async () => {
+      // 1. All worksheet_ids ever assigned to these students
+      const { data: asgn } = await supabase
+        .from('student_assignments')
+        .select('worksheet_id')
+        .in('student_id', studentIds)
+
+      if (cancelled || !asgn?.length) { if (!cancelled) { setExcludedQids([]); setLoadingExcluded(false) }; return }
+
+      const wsIds = [...new Set(asgn.map((a: any) => a.worksheet_id as string))]
+
+      // 2. All question IDs in those worksheets
+      const { data: items } = await supabase
+        .from('worksheet_items')
+        .select('question_id')
+        .in('worksheet_id', wsIds)
+        .not('question_id', 'is', null)
+
+      if (cancelled) return
+      const qids = [...new Set((items ?? []).map((i: any) => i.question_id as string).filter(Boolean))]
+      setExcludedQids(qids)
+      setLoadingExcluded(false)
+    })()
+
+    return () => { cancelled = true }
+  }, [notAssignedTo, supabase])
+
   // ── Fetch questions ────────────────────────────────────────────────────────
-  const fetchQuestions = useCallback(async (f: Filters, p: number) => {
+  const fetchQuestions = useCallback(async (f: Filters, p: number, excluded: string[]) => {
     setLoading(true)
 
     let query = supabase.from('questions').select('*', { count: 'exact' })
@@ -158,6 +209,11 @@ export default function QuestionBrowser({
       } else {
         query = query.eq('difficulty', f.difficulty)
       }
+    }
+
+    // "Not assigned to" filter — exclude questions already seen by selected students
+    if (excluded.length > 0) {
+      query = query.not('id', 'in', `(${excluded.join(',')})`)
     }
 
     if (f.tags.length > 0) {
@@ -208,8 +264,8 @@ export default function QuestionBrowser({
   }, [supabase])
 
   useEffect(() => {
-    if (!aiMode) fetchQuestions(filters, page)
-  }, [filters, page, fetchQuestions, aiMode])
+    if (!aiMode) fetchQuestions(filters, page, excludedQids)
+  }, [filters, page, fetchQuestions, aiMode, excludedQids])
 
   // ── AI Query ───────────────────────────────────────────────────────────────
   const runAiQuery = useCallback(async (prompt: string, count: number) => {
@@ -508,7 +564,7 @@ export default function QuestionBrowser({
         }
       }
 
-      await fetchQuestions(filters, page)
+      await fetchQuestions(filters, page, excludedQids)
       setShowFindReplace(false)
       setFindTagId(null)
       setReplaceTagId(null)
@@ -614,6 +670,86 @@ export default function QuestionBrowser({
             ))}
           </div>
         </div>
+
+        {/* Not Assigned To filter */}
+        {allStudents.length > 0 && (
+          <div className="mb-5">
+            <button
+              onClick={() => setNotAssignedOpen(o => !o)}
+              className="w-full flex items-center justify-between text-xs font-medium mb-2"
+              style={{ color: 'var(--foreground)' }}
+            >
+              <span>
+                Not Assigned To
+                {notAssignedTo.size > 0 && (
+                  <span className="ml-1 px-1.5 py-0.5 rounded-full text-white text-xs"
+                    style={{ background: 'var(--accent)', fontSize: 10 }}>
+                    {notAssignedTo.size}
+                  </span>
+                )}
+              </span>
+              <svg className={`w-3 h-3 transition-transform ${notAssignedOpen ? 'rotate-180' : ''}`}
+                fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+
+            {notAssignedOpen && (
+              <div className="flex flex-col gap-0.5">
+                {loadingExcluded && (
+                  <div className="flex items-center gap-1.5 px-2 py-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                    <div className="w-3 h-3 border-2 rounded-full animate-spin flex-shrink-0"
+                      style={{ borderColor: 'var(--border)', borderTopColor: 'var(--accent)' }} />
+                    Checking assignments...
+                  </div>
+                )}
+                {!loadingExcluded && notAssignedTo.size > 0 && (
+                  <p className="text-xs px-2 mb-1" style={{ color: 'var(--accent)' }}>
+                    Hiding {excludedQids.length} already-assigned question{excludedQids.length !== 1 ? 's' : ''}
+                  </p>
+                )}
+                {allStudents.map(s => {
+                  const checked = notAssignedTo.has(s.id)
+                  return (
+                    <label key={s.id}
+                      className="flex items-center gap-2 px-2 py-1 rounded-lg cursor-pointer text-xs"
+                      style={{
+                        background: checked ? 'var(--accent-light)' : 'transparent',
+                        color: checked ? 'var(--accent)' : 'var(--text-muted)',
+                        fontWeight: checked ? 600 : 400,
+                      }}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => {
+                          setPage(0)
+                          setNotAssignedTo(prev => {
+                            const next = new Set(prev)
+                            if (next.has(s.id)) next.delete(s.id)
+                            else next.add(s.id)
+                            return next
+                          })
+                        }}
+                        className="w-3 h-3 rounded flex-shrink-0"
+                        style={{ accentColor: 'var(--accent)' }}
+                      />
+                      <span className="truncate">{s.full_name || s.email}</span>
+                    </label>
+                  )
+                })}
+                {notAssignedTo.size > 0 && (
+                  <button
+                    onClick={() => { setPage(0); setNotAssignedTo(new Set()) }}
+                    className="text-xs mt-1 underline text-left px-2"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
+                    Clear filter
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Tags filter */}
         <div className="mb-2">

@@ -68,6 +68,11 @@ export default function WorksheetView({
   const [dueDate, setDueDate]     = useState('')
   const [assigning, setAssigning] = useState(false)
   const [expandedAssignment, setExpandedAssignment] = useState<string | null>(null)
+
+  // Duplicate-question warning
+  type DupeWarning = { studentId: string; studentName: string; count: number }
+  const [dupeWarnings, setDupeWarnings] = useState<DupeWarning[]>([])
+  const [checkingDupes, setCheckingDupes] = useState(false)
   const [selectedAssignmentId, setSelectedAssignmentId] = useState<string | null>(null)
   // Track which question has the explanation editor open (by question dbId)
   const [explanationOpenFor, setExplanationOpenFor] = useState<string | null>(null)
@@ -291,6 +296,73 @@ export default function WorksheetView({
     setTimeout(() => setSaved(false), 2500)
   }, [supabase, worksheetId, title, blocks])
 
+  // -- Duplicate-question check before assigning ----------------------------
+  const checkDuplicates = async (studentIds: string[]): Promise<DupeWarning[]> => {
+    if (!studentIds.length) return []
+
+    // All worksheets previously assigned to these students (excluding this one)
+    const { data: prevAssignments } = await supabase
+      .from('student_assignments')
+      .select('student_id, worksheet_id')
+      .in('student_id', studentIds)
+      .neq('worksheet_id', worksheetId)
+
+    if (!prevAssignments?.length) return []
+
+    const wsIds = [...new Set(prevAssignments.map((a: any) => a.worksheet_id as string))]
+
+    // Question IDs from those worksheets
+    const { data: items } = await supabase
+      .from('worksheet_items')
+      .select('worksheet_id, question_id')
+      .in('worksheet_id', wsIds)
+      .not('question_id', 'is', null)
+
+    // Build worksheet_id -> Set<question_id>
+    const qsByWs = new Map<string, Set<string>>()
+    for (const item of (items ?? []) as any[]) {
+      if (!item.question_id) continue
+      if (!qsByWs.has(item.worksheet_id)) qsByWs.set(item.worksheet_id, new Set())
+      qsByWs.get(item.worksheet_id)!.add(item.question_id as string)
+    }
+
+    // Build student_id -> Set<question_id already seen>
+    const seenByStudent = new Map<string, Set<string>>()
+    for (const a of prevAssignments as any[]) {
+      if (!seenByStudent.has(a.student_id)) seenByStudent.set(a.student_id, new Set())
+      const qs = qsByWs.get(a.worksheet_id) ?? new Set()
+      qs.forEach(qid => seenByStudent.get(a.student_id)!.add(qid))
+    }
+
+    // Compare with current worksheet's question IDs
+    const currentQids = new Set(blocks.filter(b => b.type === 'question').map(b => b.question.id))
+    const warnings: DupeWarning[] = []
+    for (const sid of studentIds) {
+      const seen = seenByStudent.get(sid) ?? new Set()
+      const dupeCount = [...currentQids].filter(qid => seen.has(qid)).length
+      if (dupeCount > 0) {
+        const student = students.find(s => s.id === sid)
+        warnings.push({ studentId: sid, studentName: student?.full_name || student?.email || 'Student', count: dupeCount })
+      }
+    }
+    return warnings
+  }
+
+  // Runs duplicate check first; if clear (or forced) calls handleAssign
+  const handleAssignClick = async (force = false) => {
+    if (!force) {
+      setCheckingDupes(true)
+      const warnings = await checkDuplicates(Array.from(selectedStudents))
+      setCheckingDupes(false)
+      if (warnings.length > 0) {
+        setDupeWarnings(warnings)
+        return
+      }
+    }
+    setDupeWarnings([])
+    await handleAssign()
+  }
+
   // -- Assign --------------------------------------------------------------─
   const handleAssign = async () => {
     setAssigning(true)
@@ -350,6 +422,7 @@ export default function WorksheetView({
     setShowAssign(false)
     setSelectedStudents(new Set())
     setDueDate('')
+    setDupeWarnings([])
   }
 
   const questionCount = blocks.filter(b => b.type === 'question').length
@@ -1089,11 +1162,14 @@ export default function WorksheetView({
                       className="flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer"
                       style={{ background: checked ? 'var(--accent-light)' : 'transparent' }}>
                       <input type="checkbox" checked={checked}
-                        onChange={() => setSelectedStudents(prev => {
-                          const next = new Set(prev)
-                          if (next.has(s.id)) { next.delete(s.id) } else { next.add(s.id) }
-                          return next
-                        })}
+                        onChange={() => {
+                          setDupeWarnings([])
+                          setSelectedStudents(prev => {
+                            const next = new Set(prev)
+                            if (next.has(s.id)) { next.delete(s.id) } else { next.add(s.id) }
+                            return next
+                          })
+                        }}
                         className="w-4 h-4 rounded" style={{ accentColor: 'var(--accent)' }} />
                       <div className="min-w-0">
                         <p className="text-sm font-medium truncate" style={{ color: 'var(--foreground)' }}>{s.full_name || s.email}</p>
@@ -1112,11 +1188,47 @@ export default function WorksheetView({
                 style={{ borderColor: 'var(--border)', background: 'var(--background)', color: 'var(--foreground)' }} />
             </div>
 
-            <button onClick={handleAssign} disabled={assigning || selectedStudents.size === 0}
-              className="w-full py-2.5 rounded-lg text-sm font-medium text-white disabled:opacity-50"
-              style={{ background: 'var(--accent)' }}>
-              {assigning ? 'Assigning…' : `Assign to ${selectedStudents.size || 0} student${selectedStudents.size !== 1 ? 's' : ''}`}
-            </button>
+            {/* Duplicate-question warning */}
+            {dupeWarnings.length > 0 && (
+              <div className="mb-4 rounded-xl border p-3" style={{ background: '#fffbeb', borderColor: '#fcd34d' }}>
+                <div className="flex items-start gap-2 mb-2">
+                  <span className="text-base leading-none flex-shrink-0 mt-0.5">&#9888;&#65039;</span>
+                  <p className="text-sm font-semibold" style={{ color: '#92400e' }}>Duplicate questions detected</p>
+                </div>
+                <div className="space-y-1 mb-3">
+                  {dupeWarnings.map(w => (
+                    <p key={w.studentId} className="text-xs pl-6" style={{ color: '#78350f' }}>
+                      {w.studentName} has already received {w.count} question{w.count !== 1 ? 's' : ''} from this worksheet.
+                    </p>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setDupeWarnings([])}
+                    className="flex-1 py-1.5 rounded-lg text-xs font-medium border"
+                    style={{ borderColor: '#fcd34d', color: '#92400e', background: 'transparent' }}>
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => handleAssignClick(true)}
+                    disabled={assigning}
+                    className="flex-1 py-1.5 rounded-lg text-xs font-medium text-white disabled:opacity-50"
+                    style={{ background: '#d97706' }}>
+                    {assigning ? 'Assigning…' : 'Assign Anyway'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {dupeWarnings.length === 0 && (
+              <button
+                onClick={() => handleAssignClick(false)}
+                disabled={assigning || checkingDupes || selectedStudents.size === 0}
+                className="w-full py-2.5 rounded-lg text-sm font-medium text-white disabled:opacity-50"
+                style={{ background: 'var(--accent)' }}>
+                {checkingDupes ? 'Checking…' : assigning ? 'Assigning…' : `Assign to ${selectedStudents.size || 0} student${selectedStudents.size !== 1 ? 's' : ''}`}
+              </button>
+            )}
           </div>
         </div>
       )}
