@@ -128,6 +128,18 @@ function WrongAnswerCard({ ans }: { ans: EnrichedAnswer }) {
 
       {/* Answer info */}
       <div className="p-4 space-y-3">
+        {/* Student notes — shown first so they're immediately visible */}
+        {ans.student_notes && (
+          <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg border"
+            style={{ background: '#fefce8', borderColor: '#fde68a' }}>
+            <svg className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="#ca8a04">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+            </svg>
+            <p className="text-sm italic" style={{ color: '#92400e' }}>{ans.student_notes}</p>
+          </div>
+        )}
+
         <div className="flex gap-6 flex-wrap">
           <div>
             <p className="text-xs font-medium mb-1" style={{ color: 'var(--text-muted)' }}>Student's answer</p>
@@ -152,17 +164,16 @@ function WrongAnswerCard({ ans }: { ans: EnrichedAnswer }) {
               </span>
             </div>
           )}
+          {ans.time_spent_seconds != null && (
+            <div>
+              <p className="text-xs font-medium mb-1" style={{ color: 'var(--text-muted)' }}>Time spent</p>
+              <span className="text-sm px-2.5 py-1 rounded-lg"
+                style={{ background: 'var(--border)', color: 'var(--foreground)' }}>
+                {ans.time_spent_seconds}s
+              </span>
+            </div>
+          )}
         </div>
-
-        {ans.student_notes && (
-          <div>
-            <p className="text-xs font-medium mb-1" style={{ color: 'var(--text-muted)' }}>Student notes</p>
-            <p className="text-sm italic px-3 py-2 rounded-lg"
-              style={{ background: '#fefce8', color: '#92400e' }}>
-              {ans.student_notes}
-            </p>
-          </div>
-        )}
 
         {/* Show answer image toggle */}
         {ans.answer_image_url && (
@@ -306,11 +317,26 @@ const TIME_BUCKETS = [
 
 export default function AnalyticsClient({ student, answers }: Props) {
   const [confFilter, setConfFilter] = useState<Set<number>>(new Set())
+  const [timeFilter, setTimeFilter] = useState<Set<string>>(new Set())
 
-  // Apply confidence filter — when active, only include answers with a matching rating
-  const displayAnswers = confFilter.size === 0
-    ? answers
-    : answers.filter(a => a.confidence_level !== null && confFilter.has(a.confidence_level))
+  const toggleTimeBucket = (label: string) =>
+    setTimeFilter(prev => { const n = new Set(prev); n.has(label) ? n.delete(label) : n.add(label); return n })
+
+  const clearAllFilters = () => { setConfFilter(new Set()); setTimeFilter(new Set()) }
+  const anyFilterActive = confFilter.size > 0 || timeFilter.size > 0
+
+  // Chain confidence + time filters — all downstream stats reflect the active selection
+  const displayAnswers = answers
+    .filter(a =>
+      confFilter.size === 0 ||
+      (a.confidence_level !== null && confFilter.has(a.confidence_level))
+    )
+    .filter(a => {
+      if (timeFilter.size === 0) return true
+      if (a.time_spent_seconds == null) return false
+      const t = a.time_spent_seconds
+      return TIME_BUCKETS.some(b => timeFilter.has(b.label) && t >= b.min && t < b.max)
+    })
 
   const tree = buildTree(displayAnswers)
   const subjects = Object.values(tree).sort((a, b) => a.name.localeCompare(b.name))
@@ -319,7 +345,7 @@ export default function AnalyticsClient({ student, answers }: Props) {
   const totalCorrect  = displayAnswers.filter(a => a.is_correct === true).length
   const totalPct      = pct(totalCorrect, totalAnswered)
 
-  // Weakest skills across all subjects (wrong >= 1, sorted by % desc for worst first)
+  // Weakest skills across all subjects (wrong >= 1, sorted by % asc for worst first)
   const allSkills: SkillStats[] = []
   for (const subj of subjects) {
     for (const dom of Object.values(subj.domains)) {
@@ -331,12 +357,21 @@ export default function AnalyticsClient({ student, answers }: Props) {
   allSkills.sort((a, b) => pct(a.correct, a.total) - pct(b.correct, b.total))
   const weakestSkills = allSkills.slice(0, 5)
 
-  // Time distribution
-  const timedAnswers  = displayAnswers.filter(a => a.time_spent_seconds != null)
-  const timeBuckets   = TIME_BUCKETS.map(b => ({
+  // Time distribution — always computed over ALL answers (not displayAnswers) so the
+  // bars give full context even when a bucket filter is active.
+  const allTimedAnswers = answers.filter(a => a.time_spent_seconds != null)
+  const timeBuckets = TIME_BUCKETS.map(b => ({
     label: b.label,
-    count: timedAnswers.filter(a => {
+    // total count for bar sizing (unfiltered)
+    count: allTimedAnswers.filter(a => {
       const t = a.time_spent_seconds as number
+      return t >= b.min && t < b.max
+    }).length,
+    // filtered count shown when other filters (conf) are active
+    filteredCount: displayAnswers.filter(a => {
+      if (a.time_spent_seconds == null) return false
+      const t = a.time_spent_seconds
+      // if this bucket is in the time filter, don't double-filter here
       return t >= b.min && t < b.max
     }).length,
   }))
@@ -371,6 +406,21 @@ export default function AnalyticsClient({ student, answers }: Props) {
         </h1>
         <p className="text-sm mt-0.5" style={{ color: 'var(--text-muted)' }}>{student.email}</p>
       </div>
+
+      {/* Active filter summary + clear all */}
+      {anyFilterActive && (
+        <div className="flex items-center gap-2 flex-wrap px-1">
+          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+            Showing <strong style={{ color: 'var(--foreground)' }}>{displayAnswers.length}</strong> of {answers.length} questions
+          </span>
+          <button
+            onClick={clearAllFilters}
+            className="text-xs px-2.5 py-1 rounded-lg border font-medium"
+            style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
+            Clear all filters
+          </button>
+        </div>
+      )}
 
       {/* Confidence filter — only shown if the student has rated at least one question */}
       {hasAnyConfidence && (
@@ -437,42 +487,78 @@ export default function AnalyticsClient({ student, answers }: Props) {
         </div>
       </div>
 
-      {/* Time distribution */}
-      {timedAnswers.length > 0 && (
+      {/* Time distribution — bars are clickable filters */}
+      {allTimedAnswers.length > 0 && (
         <div className="rounded-2xl border px-6 py-5"
           style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
-          <p className="text-xs font-semibold uppercase tracking-wider mb-4"
-            style={{ color: 'var(--text-muted)' }}>
-            Time per question
-          </p>
-          <div className="space-y-2.5">
-            {timeBuckets.map(b => (
-              <div key={b.label} className="flex items-center gap-3">
-                <span className="text-xs font-mono w-16 flex-shrink-0 text-right"
-                  style={{ color: 'var(--text-muted)' }}>
-                  {b.label}
+          <div className="flex items-center justify-between mb-4">
+            <p className="text-xs font-semibold uppercase tracking-wider"
+              style={{ color: 'var(--text-muted)' }}>
+              Time per question
+            </p>
+            <div className="flex items-center gap-2">
+              {timeFilter.size > 0 && (
+                <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  {timeFilter.size} bucket{timeFilter.size !== 1 ? 's' : ''} selected
                 </span>
-                <div className="flex-1 h-5 rounded-md overflow-hidden"
-                  style={{ background: 'var(--border)' }}>
-                  <div
-                    className="h-full rounded-md transition-all"
-                    style={{
-                      width: `${Math.round((b.count / maxBucketCount) * 100)}%`,
-                      background: 'var(--accent)',
-                      opacity: 0.75,
-                    }}
-                  />
-                </div>
-                <span className="text-xs tabular-nums w-20 flex-shrink-0"
-                  style={{ color: 'var(--text-muted)' }}>
-                  {b.count} ({timedAnswers.length > 0 ? Math.round((b.count / timedAnswers.length) * 100) : 0}%)
-                </span>
-              </div>
-            ))}
+              )}
+              {timeFilter.size > 0 && (
+                <button
+                  onClick={() => setTimeFilter(new Set())}
+                  className="text-xs px-2 py-0.5 rounded border"
+                  style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
+                  Clear
+                </button>
+              )}
+              {timeFilter.size === 0 && (
+                <span className="text-xs" style={{ color: 'var(--text-muted)' }}>click to filter</span>
+              )}
+            </div>
           </div>
-          {timedAnswers.length < displayAnswers.length && (
-            <p className="text-xs mt-3" style={{ color: 'var(--text-muted)' }}>
-              {timedAnswers.length} of {displayAnswers.length} questions have timing data
+          <div className="space-y-1.5">
+            {timeBuckets.map(b => {
+              const active   = timeFilter.has(b.label)
+              const inactive = timeFilter.size > 0 && !active
+              const pctWidth = Math.round((b.count / maxBucketCount) * 100)
+              const pctOfTotal = allTimedAnswers.length > 0
+                ? Math.round((b.count / allTimedAnswers.length) * 100)
+                : 0
+              return (
+                <button
+                  key={b.label}
+                  onClick={() => toggleTimeBucket(b.label)}
+                  className="w-full flex items-center gap-3 rounded-xl px-3 py-2 transition-colors text-left"
+                  style={{
+                    background: active ? 'var(--accent-light)' : 'transparent',
+                    outline: active ? '1.5px solid var(--accent)' : 'none',
+                    opacity: inactive ? 0.45 : 1,
+                  }}>
+                  <span className="text-xs font-mono w-16 flex-shrink-0 text-right"
+                    style={{ color: active ? 'var(--accent)' : 'var(--text-muted)', fontWeight: active ? 600 : 400 }}>
+                    {b.label}
+                  </span>
+                  <div className="flex-1 h-5 rounded-md overflow-hidden"
+                    style={{ background: 'var(--border)' }}>
+                    <div
+                      className="h-full rounded-md transition-all"
+                      style={{
+                        width: `${pctWidth}%`,
+                        background: active ? 'var(--accent)' : 'var(--accent)',
+                        opacity: active ? 1 : 0.45,
+                      }}
+                    />
+                  </div>
+                  <span className="text-xs tabular-nums w-20 flex-shrink-0 text-right"
+                    style={{ color: active ? 'var(--accent)' : 'var(--text-muted)', fontWeight: active ? 600 : 400 }}>
+                    {b.count} ({pctOfTotal}%)
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+          {allTimedAnswers.length < answers.length && (
+            <p className="text-xs mt-2 px-3" style={{ color: 'var(--text-muted)' }}>
+              {allTimedAnswers.length} of {answers.length} questions have timing data
             </p>
           )}
         </div>
