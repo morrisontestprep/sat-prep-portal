@@ -3,301 +3,195 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import type { EnrichedAnswer } from './page'
+import DesmosCalculator from '@/components/DesmosCalculator'
 
 // ── Types ────────────────────────────────────────────────────────────────────
-
 type Student = { id: string; full_name: string | null; email: string | null }
-
-type Props = {
-  student: Student
-  answers: EnrichedAnswer[]
-}
-
-type SkillStats = {
-  name: string
-  total: number
-  correct: number
-  wrong: EnrichedAnswer[]
-}
-
-type DomainStats = {
-  name: string
-  total: number
-  correct: number
-  skills: Record<string, SkillStats>
-}
-
-type SubjectStats = {
-  name: string
-  total: number
-  correct: number
-  domains: Record<string, DomainStats>
-}
+type Props   = { student: Student; answers: EnrichedAnswer[] }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-function pct(correct: number, total: number) {
-  return total === 0 ? 0 : Math.round((correct / total) * 100)
+function pct(correct: number, total: number): number | null {
+  return total === 0 ? null : Math.round((correct / total) * 100)
 }
 
-function scoreColor(p: number) {
+function scoreColor(p: number | null) {
+  if (p === null) return 'var(--text-muted)'
   if (p >= 80) return '#16a34a'
   if (p >= 60) return '#d97706'
   return '#dc2626'
 }
 
 function formatSubject(s: string) {
-  if (s === 'math') return 'Math'
+  if (s === 'math')                return 'Math'
+  if (s === 'english')             return 'English'
   if (s === 'reading_and_writing') return 'Reading & Writing'
   return s
 }
 
 const CONFIDENCE_LABELS: Record<number, string> = {
-  1: 'No idea',
-  2: 'Unsure',
-  3: 'Somewhat confident',
-  4: 'Confident',
-  5: 'Very confident',
+  1: 'No idea', 2: 'Unsure', 3: 'Somewhat confident', 4: 'Confident', 5: 'Very confident',
 }
 
-// ── Aggregate answers into subject/domain/skill tree ─────────────────────────
+// ── Time bucket config ────────────────────────────────────────────────────────
+const TIME_BUCKETS = [
+  { label: '< 30s',   min: 0,   max: 30       },
+  { label: '30–60s',  min: 30,  max: 60       },
+  { label: '60–90s',  min: 60,  max: 90       },
+  { label: '90–120s', min: 90,  max: 120      },
+  { label: '120s+',   min: 120, max: Infinity },
+]
 
-function buildTree(answers: EnrichedAnswer[]): Record<string, SubjectStats> {
-  const tree: Record<string, SubjectStats> = {}
-
-  for (const ans of answers) {
-    const { subject, domain, skill } = ans
-    const isCorrect = ans.is_correct === true
-
-    if (!tree[subject]) tree[subject] = { name: formatSubject(subject), total: 0, correct: 0, domains: {} }
-    tree[subject].total++
-    if (isCorrect) tree[subject].correct++
-
-    const domainMap = tree[subject].domains
-    if (!domainMap[domain]) domainMap[domain] = { name: domain, total: 0, correct: 0, skills: {} }
-    domainMap[domain].total++
-    if (isCorrect) domainMap[domain].correct++
-
-    const skillMap = domainMap[domain].skills
-    if (!skillMap[skill]) skillMap[skill] = { name: skill, total: 0, correct: 0, wrong: [] }
-    skillMap[skill].total++
-    if (isCorrect) {
-      skillMap[skill].correct++
-    } else {
-      skillMap[skill].wrong.push(ans)
-    }
-  }
-
-  return tree
+function inBucket(a: EnrichedAnswer, label: string) {
+  const b = TIME_BUCKETS.find(x => x.label === label)
+  if (!b || a.time_spent_seconds == null) return false
+  return a.time_spent_seconds >= b.min && a.time_spent_seconds < b.max
 }
 
-// ── Sub-components ────────────────────────────────────────────────────────────
+// ── Cross-filter helper: apply subject/domain/skill filter to a pool ──────────
+function applySubjectFilter(
+  pool: EnrichedAnswer[],
+  selSubject: string | null,
+  selDomain:  string | null,
+  selSkill:   string | null,
+) {
+  if (selSkill)   return pool.filter(a => a.skill   === selSkill)
+  if (selDomain)  return pool.filter(a => a.domain  === selDomain)
+  if (selSubject) return pool.filter(a => a.subject === selSubject)
+  return pool
+}
 
-function ProgressBar({ correct, total }: { correct: number; total: number }) {
+// ── Filter button ────────────────────────────────────────────────────────────
+function FilterBtn({
+  label, correct, total, active, onClick, indent = 0,
+}: {
+  label: string; correct: number; total: number
+  active: boolean; onClick: () => void; indent?: number
+}) {
   const p = pct(correct, total)
   return (
-    <div className="flex items-center gap-3 min-w-0 flex-1">
-      <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--border)' }}>
-        <div
-          className="h-full rounded-full transition-all"
-          style={{ width: `${p}%`, background: scoreColor(p) }}
-        />
-      </div>
-      <span className="text-xs font-semibold tabular-nums w-10 text-right flex-shrink-0"
-        style={{ color: scoreColor(p) }}>
-        {p}%
+    <button
+      onClick={onClick}
+      className="flex items-center gap-2 px-3 py-2 rounded-xl border text-left transition-all w-full"
+      style={{
+        marginLeft: indent * 14,
+        width: `calc(100% - ${indent * 14}px)`,
+        borderColor: active ? 'var(--accent)' : 'var(--border)',
+        background:  active ? 'var(--accent-light)' : 'transparent',
+      }}>
+      <span
+        className="text-sm flex-1 min-w-0 truncate"
+        style={{ color: active ? 'var(--accent)' : 'var(--foreground)', fontWeight: active ? 600 : 400 }}>
+        {label}
       </span>
-      <span className="text-xs flex-shrink-0" style={{ color: 'var(--text-muted)' }}>
-        {correct}/{total}
+      <span className="flex-shrink-0 flex items-center gap-1 tabular-nums">
+        {p !== null ? (
+          <>
+            <span className="text-xs font-semibold" style={{ color: scoreColor(p) }}>{p}%</span>
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{correct}/{total}</span>
+          </>
+        ) : (
+          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>—</span>
+        )}
       </span>
-    </div>
+    </button>
   )
 }
 
-function WrongAnswerCard({ ans }: { ans: EnrichedAnswer }) {
-  const [showAnswer, setShowAnswer] = useState(false)
+// ── Question card ────────────────────────────────────────────────────────────
+function QuestionCard({ ans }: { ans: EnrichedAnswer }) {
+  const [showExplanation, setShowExplanation] = useState(false)
+  const isCorrect = ans.is_correct === true
 
   return (
-    <div className="rounded-xl border overflow-hidden" style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
+    <div
+      className="rounded-2xl border overflow-hidden"
+      style={{
+        background:  'var(--card)',
+        borderColor: isCorrect ? '#bbf7d0' : '#fecaca',
+      }}>
+
+      {/* Header strip */}
+      <div
+        className="px-4 py-2 flex items-center gap-2 text-xs flex-wrap border-b"
+        style={{ background: isCorrect ? '#f0fdf4' : '#fef2f2', borderColor: isCorrect ? '#bbf7d0' : '#fecaca' }}>
+        <span
+          className="w-5 h-5 rounded-full flex items-center justify-center font-bold text-white flex-shrink-0"
+          style={{ background: isCorrect ? '#16a34a' : '#dc2626' }}>
+          {isCorrect ? '✓' : '✗'}
+        </span>
+        <span style={{ color: 'var(--text-muted)' }}>{ans.domain}</span>
+        <span style={{ color: 'var(--text-muted)' }}>·</span>
+        <span className="truncate flex-1" style={{ color: 'var(--text-muted)' }}>{ans.skill}</span>
+        {ans.time_spent_seconds != null && (
+          <span className="flex-shrink-0 px-1.5 py-0.5 rounded" style={{ background: 'var(--border)', color: 'var(--text-muted)' }}>
+            ⏱ {ans.time_spent_seconds}s
+          </span>
+        )}
+        {ans.confidence_level != null && (
+          <span className="flex-shrink-0 px-1.5 py-0.5 rounded" style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
+            conf {ans.confidence_level}/5
+          </span>
+        )}
+      </div>
+
       {/* Question image */}
       {ans.question_image_url && (
-        <div className="p-4 border-b" style={{ borderColor: 'var(--border)' }}>
+        <div className="px-4 pt-4 pb-2">
           <img src={ans.question_image_url} alt="Question" className="w-full rounded-lg" />
         </div>
       )}
 
-      {/* Answer info */}
-      <div className="p-4 space-y-3">
-        {/* Student notes — shown first so they're immediately visible */}
-        {ans.student_notes && (
-          <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg border"
-            style={{ background: '#fefce8', borderColor: '#fde68a' }}>
-            <svg className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="#ca8a04">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-            </svg>
-            <p className="text-sm italic" style={{ color: '#92400e' }}>{ans.student_notes}</p>
-          </div>
-        )}
+      {/* Student notes */}
+      {ans.student_notes && (
+        <div
+          className="mx-4 mb-3 flex items-start gap-2 px-3 py-2.5 rounded-lg border"
+          style={{ background: '#fefce8', borderColor: '#fde68a' }}>
+          <svg className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="#ca8a04">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+          </svg>
+          <p className="text-sm italic" style={{ color: '#92400e' }}>{ans.student_notes}</p>
+        </div>
+      )}
 
-        <div className="flex gap-6 flex-wrap">
+      {/* Answer row */}
+      <div className="px-4 pb-4 flex items-center gap-4 flex-wrap text-sm">
+        <div>
+          <span className="text-xs font-medium mr-1" style={{ color: 'var(--text-muted)' }}>Answered:</span>
+          <span
+            className="font-semibold px-2 py-0.5 rounded-lg"
+            style={{ background: isCorrect ? '#f0fdf4' : '#fef2f2', color: isCorrect ? '#16a34a' : '#dc2626' }}>
+            {ans.selected_answer ?? '—'}
+          </span>
+        </div>
+        {!isCorrect && (
           <div>
-            <p className="text-xs font-medium mb-1" style={{ color: 'var(--text-muted)' }}>Student's answer</p>
-            <span className="text-sm font-semibold px-2.5 py-1 rounded-lg"
-              style={{ background: '#fef2f2', color: '#dc2626' }}>
-              {ans.selected_answer ?? '—'}
-            </span>
-          </div>
-          <div>
-            <p className="text-xs font-medium mb-1" style={{ color: 'var(--text-muted)' }}>Correct answer</p>
-            <span className="text-sm font-semibold px-2.5 py-1 rounded-lg"
-              style={{ background: '#f0fdf4', color: '#16a34a' }}>
+            <span className="text-xs font-medium mr-1" style={{ color: 'var(--text-muted)' }}>Correct:</span>
+            <span className="font-semibold px-2 py-0.5 rounded-lg" style={{ background: '#f0fdf4', color: '#16a34a' }}>
               {ans.correct_answer}
             </span>
           </div>
-          {ans.confidence_level && (
-            <div>
-              <p className="text-xs font-medium mb-1" style={{ color: 'var(--text-muted)' }}>Confidence</p>
-              <span className="text-sm px-2.5 py-1 rounded-lg"
-                style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
-                {ans.confidence_level}/5 — {CONFIDENCE_LABELS[ans.confidence_level]}
-              </span>
-            </div>
-          )}
-          {ans.time_spent_seconds != null && (
-            <div>
-              <p className="text-xs font-medium mb-1" style={{ color: 'var(--text-muted)' }}>Time spent</p>
-              <span className="text-sm px-2.5 py-1 rounded-lg"
-                style={{ background: 'var(--border)', color: 'var(--foreground)' }}>
-                {ans.time_spent_seconds}s
-              </span>
-            </div>
-          )}
-        </div>
+        )}
+        {ans.confidence_level != null && (
+          <span className="text-xs px-2 py-0.5 rounded-lg" style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
+            {CONFIDENCE_LABELS[ans.confidence_level]}
+          </span>
+        )}
+        <span className="text-xs ml-auto" style={{ color: 'var(--text-muted)' }}>{ans.worksheet_title}</span>
+      </div>
 
-        {/* Show answer image toggle */}
-        {ans.answer_image_url && (
+      {/* Explanation toggle */}
+      {ans.answer_image_url && (
+        <div className="px-4 pb-4 border-t pt-3" style={{ borderColor: 'var(--border)' }}>
           <button
-            onClick={() => setShowAnswer(v => !v)}
+            onClick={() => setShowExplanation(v => !v)}
             className="text-xs font-medium underline"
             style={{ color: 'var(--accent)' }}>
-            {showAnswer ? 'Hide answer explanation' : 'Show answer explanation'}
+            {showExplanation ? 'Hide explanation' : 'Show explanation'}
           </button>
-        )}
-        {showAnswer && ans.answer_image_url && (
-          <img src={ans.answer_image_url} alt="Answer explanation" className="w-full rounded-lg mt-2" />
-        )}
-
-        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-          From: {ans.worksheet_title}
-        </p>
-      </div>
-    </div>
-  )
-}
-
-function SkillRow({ skill }: { skill: SkillStats }) {
-  const [exploreOpen, setExploreOpen] = useState(false)
-  const hasWrong = skill.wrong.length > 0
-
-  return (
-    <div>
-      <div className="flex items-center gap-3 py-2 pl-10 pr-4">
-        <span className="text-sm min-w-0 flex-1 truncate" style={{ color: 'var(--foreground)' }}>
-          {skill.name}
-        </span>
-        <ProgressBar correct={skill.correct} total={skill.total} />
-        {hasWrong && (
-          <button
-            onClick={() => setExploreOpen(v => !v)}
-            className="text-xs px-2.5 py-1 rounded-lg flex-shrink-0 font-medium"
-            style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
-            {exploreOpen ? 'Hide' : `Explore ${skill.wrong.length} wrong`}
-          </button>
-        )}
-      </div>
-
-      {exploreOpen && (
-        <div className="pl-10 pr-4 pb-4 space-y-3">
-          {skill.wrong.map((ans, i) => (
-            <WrongAnswerCard key={`${ans.assignment_id}-${ans.question_id}-${i}`} ans={ans} />
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function DomainRow({ domain }: { domain: DomainStats }) {
-  const [open, setOpen] = useState(false)
-  const skills = Object.values(domain.skills).sort((a, b) => pct(a.correct, a.total) - pct(b.correct, b.total))
-
-  return (
-    <div className="border-t" style={{ borderColor: 'var(--border)' }}>
-      <button
-        className="w-full flex items-center gap-3 py-2.5 px-6 text-left hover:opacity-80 transition-opacity"
-        onClick={() => setOpen(v => !v)}>
-        <svg
-          className="w-3.5 h-3.5 flex-shrink-0 transition-transform"
-          style={{ color: 'var(--text-muted)', transform: open ? 'rotate(90deg)' : 'rotate(0deg)' }}
-          fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-        </svg>
-        <span className="text-sm font-medium flex-1 min-w-0 truncate" style={{ color: 'var(--foreground)' }}>
-          {domain.name}
-        </span>
-        <ProgressBar correct={domain.correct} total={domain.total} />
-      </button>
-
-      {open && (
-        <div className="pb-1" style={{ background: 'var(--background)' }}>
-          {skills.map(skill => (
-            <SkillRow key={skill.name} skill={skill} />
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function SubjectSection({ subject }: { subject: SubjectStats }) {
-  const [open, setOpen] = useState(true)
-  const p = pct(subject.correct, subject.total)
-  const domains = Object.values(subject.domains).sort((a, b) => pct(a.correct, a.total) - pct(b.correct, b.total))
-
-  return (
-    <div className="rounded-2xl border overflow-hidden" style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
-      {/* Subject header */}
-      <button
-        className="w-full flex items-center gap-4 px-6 py-4 text-left"
-        onClick={() => setOpen(v => !v)}>
-        <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0"
-          style={{ background: `${scoreColor(p)}20` }}>
-          <span className="text-sm font-bold" style={{ color: scoreColor(p) }}>{p}%</span>
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="font-semibold text-sm" style={{ color: 'var(--foreground)' }}>{subject.name}</p>
-          <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-            {subject.correct} correct · {subject.total - subject.correct} incorrect · {subject.total} total
-          </p>
-        </div>
-        <div className="w-32 hidden sm:block">
-          <ProgressBar correct={subject.correct} total={subject.total} />
-        </div>
-        <svg
-          className="w-4 h-4 flex-shrink-0 transition-transform"
-          style={{ color: 'var(--text-muted)', transform: open ? 'rotate(180deg)' : 'rotate(0deg)' }}
-          fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
-
-      {/* Domains */}
-      {open && (
-        <div>
-          {domains.map(domain => (
-            <DomainRow key={domain.name} domain={domain} />
-          ))}
+          {showExplanation && (
+            <img src={ans.answer_image_url} alt="Explanation" className="w-full rounded-lg mt-3" />
+          )}
         </div>
       )}
     </div>
@@ -305,300 +199,237 @@ function SubjectSection({ subject }: { subject: SubjectStats }) {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-
-// ── Time bucket config ────────────────────────────────────────────────────────
-const TIME_BUCKETS = [
-  { label: '< 30s',   min: 0,   max: 30   },
-  { label: '30–60s',  min: 30,  max: 60   },
-  { label: '60–90s',  min: 60,  max: 90   },
-  { label: '90–120s', min: 90,  max: 120  },
-  { label: '120s+',   min: 120, max: Infinity },
-]
-
 export default function AnalyticsClient({ student, answers }: Props) {
-  const [confFilter, setConfFilter] = useState<Set<number>>(new Set())
-  const [timeFilter, setTimeFilter] = useState<Set<string>>(new Set())
+  const [selTime,    setSelTime]    = useState<string | null>(null)
+  const [selSubject, setSelSubject] = useState<string | null>(null)
+  const [selDomain,  setSelDomain]  = useState<string | null>(null)
+  const [selSkill,   setSelSkill]   = useState<string | null>(null)
+  const [correctness, setCorrectness] = useState<'all' | 'correct' | 'wrong'>('all')
 
-  const toggleTimeBucket = (label: string) =>
-    setTimeFilter(prev => { const n = new Set(prev); n.has(label) ? n.delete(label) : n.add(label); return n })
-
-  const clearAllFilters = () => { setConfFilter(new Set()); setTimeFilter(new Set()) }
-  const anyFilterActive = confFilter.size > 0 || timeFilter.size > 0
-
-  // Chain confidence + time filters — all downstream stats reflect the active selection
-  const displayAnswers = answers
-    .filter(a =>
-      confFilter.size === 0 ||
-      (a.confidence_level !== null && confFilter.has(a.confidence_level))
+  if (answers.length === 0) {
+    return (
+      <div>
+        <Link href="/students" className="text-sm" style={{ color: 'var(--accent)' }}>← Students</Link>
+        <h1 className="text-2xl font-bold mt-2 mb-1" style={{ color: 'var(--foreground)' }}>
+          {student.full_name || student.email}
+        </h1>
+        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No answers submitted yet.</p>
+      </div>
     )
-    .filter(a => {
-      if (timeFilter.size === 0) return true
-      if (a.time_spent_seconds == null) return false
-      const t = a.time_spent_seconds
-      return TIME_BUCKETS.some(b => timeFilter.has(b.label) && t >= b.min && t < b.max)
-    })
+  }
 
-  const tree = buildTree(displayAnswers)
-  const subjects = Object.values(tree).sort((a, b) => a.name.localeCompare(b.name))
+  // ── Pools for cross-filter % computation ──────────────────────────────────
+  // Time buttons: see % for each bucket given the current subject/domain/skill filter
+  const poolForTime    = applySubjectFilter(answers, selSubject, selDomain, selSkill)
+
+  // Subject buttons: see % for each subject given the current time filter
+  const poolForSubject = selTime ? answers.filter(a => inBucket(a, selTime)) : answers
+
+  // Domain buttons: filtered by time + subject
+  const poolForDomain  = poolForSubject.filter(a => !selSubject || a.subject === selSubject)
+
+  // Skill buttons: filtered by time + subject + domain
+  const poolForSkill   = poolForDomain.filter(a => !selDomain || a.domain === selDomain)
+
+  // ── Display answers (all filters + correctness) ───────────────────────────
+  const displayAnswers = applySubjectFilter(
+    selTime ? answers.filter(a => inBucket(a, selTime)) : answers,
+    selSubject, selDomain, selSkill,
+  ).filter(a =>
+    correctness === 'all'     ? true :
+    correctness === 'correct' ? a.is_correct === true :
+                                a.is_correct !== true
+  )
 
   const totalAnswered = displayAnswers.length
   const totalCorrect  = displayAnswers.filter(a => a.is_correct === true).length
   const totalPct      = pct(totalCorrect, totalAnswered)
 
-  // Weakest skills across all subjects (wrong >= 1, sorted by % asc for worst first)
-  const allSkills: SkillStats[] = []
-  for (const subj of subjects) {
-    for (const dom of Object.values(subj.domains)) {
-      for (const skill of Object.values(dom.skills)) {
-        if (skill.wrong.length > 0) allSkills.push(skill)
-      }
-    }
-  }
-  allSkills.sort((a, b) => pct(a.correct, a.total) - pct(b.correct, b.total))
-  const weakestSkills = allSkills.slice(0, 5)
+  // ── Subject / domain / skill lists ───────────────────────────────────────
+  const allSubjects = [...new Set(answers.map(a => a.subject))].sort()
 
-  // Time distribution — always computed over ALL answers (not displayAnswers) so the
-  // bars give full context even when a bucket filter is active.
-  const allTimedAnswers = answers.filter(a => a.time_spent_seconds != null)
-  const timeBuckets = TIME_BUCKETS.map(b => ({
-    label: b.label,
-    // total count for bar sizing (unfiltered)
-    count: allTimedAnswers.filter(a => {
-      const t = a.time_spent_seconds as number
-      return t >= b.min && t < b.max
-    }).length,
-    // filtered count shown when other filters (conf) are active
-    filteredCount: displayAnswers.filter(a => {
-      if (a.time_spent_seconds == null) return false
-      const t = a.time_spent_seconds
-      // if this bucket is in the time filter, don't double-filter here
-      return t >= b.min && t < b.max
-    }).length,
-  }))
-  const maxBucketCount = Math.max(...timeBuckets.map(b => b.count), 1)
-  const hasAnyConfidence = answers.some(a => a.confidence_level !== null)
+  const domains = selSubject
+    ? [...new Set(answers.filter(a => a.subject === selSubject).map(a => a.domain))].sort()
+    : []
 
-  if (answers.length === 0) {
-    return (
-      <div>
-        <div className="flex items-center gap-3 mb-6">
-          <Link href="/students" className="text-sm" style={{ color: 'var(--accent)' }}>← Students</Link>
-        </div>
-        <h1 className="text-2xl font-bold mb-1" style={{ color: 'var(--foreground)' }}>
-          {student.full_name || student.email}
-        </h1>
-        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-          No answers submitted yet.
-        </p>
-      </div>
-    )
-  }
+  const skills = selDomain
+    ? [...new Set(answers.filter(a => a.domain === selDomain).map(a => a.skill))].sort()
+    : []
+
+  const showCalculator = selSubject === 'math'
 
   return (
-    <div className="space-y-6">
-      {/* Breadcrumb + header */}
+    <div className="flex flex-col gap-4 pb-20">
+      {/* Header */}
       <div>
-        <Link href="/students" className="text-sm" style={{ color: 'var(--accent)' }}>
-          ← Students
-        </Link>
+        <Link href="/students" className="text-sm" style={{ color: 'var(--accent)' }}>← Students</Link>
         <h1 className="text-2xl font-bold mt-2" style={{ color: 'var(--foreground)' }}>
           {student.full_name || student.email}
         </h1>
         <p className="text-sm mt-0.5" style={{ color: 'var(--text-muted)' }}>{student.email}</p>
       </div>
 
-      {/* Active filter summary + clear all */}
-      {anyFilterActive && (
-        <div className="flex items-center gap-2 flex-wrap px-1">
-          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-            Showing <strong style={{ color: 'var(--foreground)' }}>{displayAnswers.length}</strong> of {answers.length} questions
-          </span>
-          <button
-            onClick={clearAllFilters}
-            className="text-xs px-2.5 py-1 rounded-lg border font-medium"
-            style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
-            Clear all filters
-          </button>
-        </div>
-      )}
+      {/* Two-column layout */}
+      <div className="flex gap-5 items-start">
 
-      {/* Confidence filter — only shown if the student has rated at least one question */}
-      {hasAnyConfidence && (
-        <div className="rounded-2xl border px-5 py-3.5 flex items-center gap-3 flex-wrap"
-          style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
-          <span className="text-xs font-medium flex-shrink-0" style={{ color: 'var(--text-muted)' }}>
-            Filter by confidence:
-          </span>
-          {[1, 2, 3, 4, 5].map(c => {
-            const active = confFilter.has(c)
-            return (
-              <button key={c}
-                title={CONFIDENCE_LABELS[c]}
-                onClick={() => setConfFilter(prev => {
-                  const next = new Set(prev)
-                  if (next.has(c)) next.delete(c); else next.add(c)
-                  return next
-                })}
-                className="text-xs px-2.5 py-1 rounded-lg border transition-colors"
-                style={{
-                  borderColor: active ? 'var(--accent)' : 'var(--border)',
-                  color:       active ? 'var(--accent)' : 'var(--text-muted)',
-                  background:  active ? 'var(--accent-light)' : 'transparent',
-                  fontWeight:  active ? 600 : 400,
-                }}>
-                {c} — {CONFIDENCE_LABELS[c]}
-              </button>
-            )
-          })}
-          {confFilter.size > 0 && (
-            <>
-              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                · {displayAnswers.length} of {answers.length} questions
-              </span>
-              <button
-                onClick={() => setConfFilter(new Set())}
-                className="text-xs px-2 py-1 rounded border"
-                style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
-                Clear
-              </button>
-            </>
-          )}
-        </div>
-      )}
+        {/* ── LEFT SIDEBAR ──────────────────────────────────────────────── */}
+        <aside className="flex-shrink-0 space-y-5" style={{ width: 272 }}>
 
-      {/* Overall summary bar */}
-      <div className="rounded-2xl border px-6 py-5 flex flex-wrap gap-6"
-        style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
-        <div>
-          <p className="text-xs font-medium mb-1" style={{ color: 'var(--text-muted)' }}>Overall</p>
-          <p className="text-3xl font-bold" style={{ color: scoreColor(totalPct) }}>{totalPct}%</p>
-        </div>
-        <div>
-          <p className="text-xs font-medium mb-1" style={{ color: 'var(--text-muted)' }}>Questions</p>
-          <p className="text-3xl font-bold" style={{ color: 'var(--foreground)' }}>{totalAnswered}</p>
-        </div>
-        <div>
-          <p className="text-xs font-medium mb-1" style={{ color: 'var(--text-muted)' }}>Correct</p>
-          <p className="text-3xl font-bold" style={{ color: '#16a34a' }}>{totalCorrect}</p>
-        </div>
-        <div>
-          <p className="text-xs font-medium mb-1" style={{ color: 'var(--text-muted)' }}>Incorrect</p>
-          <p className="text-3xl font-bold" style={{ color: '#dc2626' }}>{totalAnswered - totalCorrect}</p>
-        </div>
-      </div>
-
-      {/* Time distribution — bars are clickable filters */}
-      {allTimedAnswers.length > 0 && (
-        <div className="rounded-2xl border px-6 py-5"
-          style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
-          <div className="flex items-center justify-between mb-4">
-            <p className="text-xs font-semibold uppercase tracking-wider"
-              style={{ color: 'var(--text-muted)' }}>
-              Time per question
-            </p>
-            <div className="flex items-center gap-2">
-              {timeFilter.size > 0 && (
-                <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                  {timeFilter.size} bucket{timeFilter.size !== 1 ? 's' : ''} selected
-                </span>
-              )}
-              {timeFilter.size > 0 && (
-                <button
-                  onClick={() => setTimeFilter(new Set())}
-                  className="text-xs px-2 py-0.5 rounded border"
-                  style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
-                  Clear
+          {/* Show: All / Correct / Wrong */}
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider mb-2"
+              style={{ color: 'var(--text-muted)' }}>Show</p>
+            <div className="flex gap-1">
+              {(['all', 'correct', 'wrong'] as const).map(c => (
+                <button key={c}
+                  onClick={() => setCorrectness(c)}
+                  className="flex-1 text-xs py-1.5 rounded-lg border transition-colors"
+                  style={{
+                    borderColor: correctness === c ? 'var(--accent)' : 'var(--border)',
+                    background:  correctness === c ? 'var(--accent-light)' : 'transparent',
+                    color:       correctness === c ? 'var(--accent)' : 'var(--text-muted)',
+                    fontWeight:  correctness === c ? 600 : 400,
+                  }}>
+                  {c === 'all' ? 'All' : c === 'correct' ? '✓ Correct' : '✗ Wrong'}
                 </button>
-              )}
-              {timeFilter.size === 0 && (
-                <span className="text-xs" style={{ color: 'var(--text-muted)' }}>click to filter</span>
-              )}
+              ))}
             </div>
           </div>
-          <div className="space-y-1.5">
-            {timeBuckets.map(b => {
-              const active   = timeFilter.has(b.label)
-              const inactive = timeFilter.size > 0 && !active
-              const pctWidth = Math.round((b.count / maxBucketCount) * 100)
-              const pctOfTotal = allTimedAnswers.length > 0
-                ? Math.round((b.count / allTimedAnswers.length) * 100)
-                : 0
-              return (
-                <button
-                  key={b.label}
-                  onClick={() => toggleTimeBucket(b.label)}
-                  className="w-full flex items-center gap-3 rounded-xl px-3 py-2 transition-colors text-left"
-                  style={{
-                    background: active ? 'var(--accent-light)' : 'transparent',
-                    outline: active ? '1.5px solid var(--accent)' : 'none',
-                    opacity: inactive ? 0.45 : 1,
-                  }}>
-                  <span className="text-xs font-mono w-16 flex-shrink-0 text-right"
-                    style={{ color: active ? 'var(--accent)' : 'var(--text-muted)', fontWeight: active ? 600 : 400 }}>
-                    {b.label}
-                  </span>
-                  <div className="flex-1 h-5 rounded-md overflow-hidden"
-                    style={{ background: 'var(--border)' }}>
-                    <div
-                      className="h-full rounded-md transition-all"
-                      style={{
-                        width: `${pctWidth}%`,
-                        background: active ? 'var(--accent)' : 'var(--accent)',
-                        opacity: active ? 1 : 0.45,
+
+          {/* Time per question */}
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider mb-2"
+              style={{ color: 'var(--text-muted)' }}>Time per question</p>
+            <div className="space-y-1">
+              {TIME_BUCKETS.map(b => {
+                const inB    = poolForTime.filter(a => inBucket(a, b.label))
+                const correct = inB.filter(a => a.is_correct === true).length
+                return (
+                  <FilterBtn
+                    key={b.label}
+                    label={b.label}
+                    correct={correct}
+                    total={inB.length}
+                    active={selTime === b.label}
+                    onClick={() => setSelTime(selTime === b.label ? null : b.label)}
+                  />
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Subject / domain / skill */}
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider mb-2"
+              style={{ color: 'var(--text-muted)' }}>Subject</p>
+            <div className="space-y-1">
+              {allSubjects.map(subj => {
+                const inS    = poolForSubject.filter(a => a.subject === subj)
+                const correct = inS.filter(a => a.is_correct === true).length
+                const active  = selSubject === subj
+                return (
+                  <div key={subj}>
+                    <FilterBtn
+                      label={formatSubject(subj)}
+                      correct={correct}
+                      total={inS.length}
+                      active={active}
+                      onClick={() => {
+                        if (active) { setSelSubject(null); setSelDomain(null); setSelSkill(null) }
+                        else        { setSelSubject(subj); setSelDomain(null); setSelSkill(null) }
                       }}
                     />
+
+                    {/* Domains — only shown when this subject is selected */}
+                    {active && domains.map(dom => {
+                      const inD     = poolForDomain.filter(a => a.domain === dom)
+                      const dcorrect = inD.filter(a => a.is_correct === true).length
+                      const domActive = selDomain === dom
+                      return (
+                        <div key={dom} className="mt-1 space-y-1">
+                          <FilterBtn
+                            label={dom}
+                            correct={dcorrect}
+                            total={inD.length}
+                            active={domActive}
+                            indent={1}
+                            onClick={() => {
+                              if (domActive) { setSelDomain(null); setSelSkill(null) }
+                              else           { setSelDomain(dom);  setSelSkill(null) }
+                            }}
+                          />
+
+                          {/* Skills — only shown when this domain is selected */}
+                          {domActive && skills.map(sk => {
+                            const inK     = poolForSkill.filter(a => a.skill === sk)
+                            const scorrect = inK.filter(a => a.is_correct === true).length
+                            const skActive = selSkill === sk
+                            return (
+                              <FilterBtn
+                                key={sk}
+                                label={sk}
+                                correct={scorrect}
+                                total={inK.length}
+                                active={skActive}
+                                indent={2}
+                                onClick={() => setSelSkill(skActive ? null : sk)}
+                              />
+                            )
+                          })}
+                        </div>
+                      )
+                    })}
                   </div>
-                  <span className="text-xs tabular-nums w-20 flex-shrink-0 text-right"
-                    style={{ color: active ? 'var(--accent)' : 'var(--text-muted)', fontWeight: active ? 600 : 400 }}>
-                    {b.count} ({pctOfTotal}%)
-                  </span>
-                </button>
-              )
-            })}
+                )
+              })}
+            </div>
           </div>
-          {allTimedAnswers.length < answers.length && (
-            <p className="text-xs mt-2 px-3" style={{ color: 'var(--text-muted)' }}>
-              {allTimedAnswers.length} of {answers.length} questions have timing data
-            </p>
+        </aside>
+
+        {/* ── RIGHT: Summary + question cards ────────────────────────────── */}
+        <div className="flex-1 min-w-0 space-y-4">
+
+          {/* Summary bar */}
+          <div className="flex items-center gap-6 px-5 py-3.5 rounded-2xl border"
+            style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
+            <div>
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Score</p>
+              <p className="text-2xl font-bold" style={{ color: scoreColor(totalPct) }}>
+                {totalPct !== null ? `${totalPct}%` : '—'}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Questions</p>
+              <p className="text-2xl font-bold" style={{ color: 'var(--foreground)' }}>{totalAnswered}</p>
+            </div>
+            <div>
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Correct</p>
+              <p className="text-2xl font-bold" style={{ color: '#16a34a' }}>{totalCorrect}</p>
+            </div>
+            <div>
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Incorrect</p>
+              <p className="text-2xl font-bold" style={{ color: '#dc2626' }}>{totalAnswered - totalCorrect}</p>
+            </div>
+          </div>
+
+          {/* Question cards */}
+          {displayAnswers.length === 0 ? (
+            <div className="py-16 text-center rounded-2xl border-2 border-dashed"
+              style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
+              <p className="text-sm">No questions match the current filters.</p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {displayAnswers.map((ans, i) => (
+                <QuestionCard key={`${ans.assignment_id}-${ans.question_id}-${i}`} ans={ans} />
+              ))}
+            </div>
           )}
         </div>
-      )}
-
-      {/* Weakest skills callout */}
-      {weakestSkills.length > 0 && (
-        <div className="rounded-2xl border px-6 py-5"
-          style={{ background: '#fff7ed', borderColor: '#fed7aa' }}>
-          <p className="text-sm font-semibold mb-3" style={{ color: '#92400e' }}>
-            Needs most work
-          </p>
-          <div className="space-y-2">
-            {weakestSkills.map(skill => (
-              <div key={skill.name} className="flex items-center gap-3">
-                <span className="text-sm flex-1" style={{ color: '#78350f' }}>{skill.name}</span>
-                <span className="text-xs font-semibold tabular-nums"
-                  style={{ color: scoreColor(pct(skill.correct, skill.total)) }}>
-                  {pct(skill.correct, skill.total)}%
-                </span>
-                <span className="text-xs" style={{ color: '#a16207' }}>
-                  {skill.correct}/{skill.total}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Subject breakdown */}
-      <div>
-        <h2 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-muted)' }}>
-          BREAKDOWN BY SUBJECT
-        </h2>
-        <div className="space-y-4">
-          {subjects.map(subject => (
-            <SubjectSection key={subject.name} subject={subject} />
-          ))}
-        </div>
       </div>
+
+      {/* Desmos calculator floating button — appears when Math is selected */}
+      {showCalculator && <DesmosCalculator />}
     </div>
   )
 }
