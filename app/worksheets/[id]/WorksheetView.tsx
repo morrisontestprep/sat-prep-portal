@@ -192,9 +192,7 @@ export default function WorksheetView({
   const anyFilterActive = !!selectedAssignmentId && (
     filterCorrectness !== 'all' || filterDifficulties.size > 0 || filterTime.enabled
   )
-  const filteredQuestionCount = selectedAssignmentId
-    ? blocks.filter(b => b.type === 'question' && blockPassesFilter(b)).length
-    : questionCount
+  const filteredQuestionCount = blocks.filter(b => b.type === 'question' && blockPassesFilter(b)).length
 
   // Inline "add block" picker state
   const [addMenu, setAddMenu]     = useState<string | null>(null) // localId of block to insert after, or 'top'
