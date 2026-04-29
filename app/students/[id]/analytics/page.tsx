@@ -57,6 +57,7 @@ export default async function StudentAnalyticsPage({
     .select(`
       id,
       status,
+      attempt_number,
       worksheets (
         id,
         title,
@@ -116,19 +117,57 @@ export default async function StudentAnalyticsPage({
     }
   }
 
-  // ── Enrich answers with question metadata ────────────────────────────────
-  const enrichedAnswers: EnrichedAnswer[] = []
+  // ── Build attempt_number lookup: assignment_id → attempt_number ──────────
+  const attemptMap = new Map<string, number>()
+  for (const a of assignments as any[]) {
+    attemptMap.set(a.id, a.attempt_number ?? 1)
+  }
+
+  // ── Enrich answers with question metadata + attempt_number ───────────────
+  type EnrichedWithAttempt = EnrichedAnswer & { attempt_number: number }
+  const enrichedAnswers: EnrichedWithAttempt[] = []
   for (const ans of rawAnswers ?? []) {
     const meta = questionMap.get(ans.question_id)
     if (!meta) continue
-    enrichedAnswers.push({ ...ans, ...meta })
+    enrichedAnswers.push({
+      ...ans,
+      ...meta,
+      attempt_number: attemptMap.get(ans.assignment_id) ?? 1,
+    })
   }
+
+  // ── Deduplicate: one answer per question_id ───────────────────────────────
+  // Rule 1: use the most recent attempt (highest attempt_number) per question.
+  // Rule 2: if that answer is blank (selected_answer === null), fall back to
+  //         the most recent attempt that is not blank.
+  const nonBlankBest = new Map<string, EnrichedWithAttempt>()
+  const anyBest      = new Map<string, EnrichedWithAttempt>()
+
+  for (const ans of enrichedAnswers) {
+    // Track best overall (highest attempt_number regardless of blank)
+    const prev = anyBest.get(ans.question_id)
+    if (!prev || ans.attempt_number > prev.attempt_number) {
+      anyBest.set(ans.question_id, ans)
+    }
+    // Track best non-blank (highest attempt_number where an answer was given)
+    if (ans.selected_answer !== null) {
+      const prevNB = nonBlankBest.get(ans.question_id)
+      if (!prevNB || ans.attempt_number > prevNB.attempt_number) {
+        nonBlankBest.set(ans.question_id, ans)
+      }
+    }
+  }
+
+  // Prefer the best non-blank; fall back to best overall if all attempts blank
+  const dedupedAnswers: EnrichedAnswer[] = Array.from(anyBest.keys()).map(qid =>
+    nonBlankBest.get(qid) ?? anyBest.get(qid)!
+  )
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--background)' }}>
       <Nav userEmail={user.email} />
       <main className="flex-1 p-6 max-w-5xl mx-auto w-full">
-        <AnalyticsClient student={student} answers={enrichedAnswers} />
+        <AnalyticsClient student={student} answers={dedupedAnswers} />
       </main>
     </div>
   )
