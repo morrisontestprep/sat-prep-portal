@@ -6,6 +6,55 @@ import type { NoteComment } from './page'
 
 type SelectionInfo = { text: string; x: number; y: number }
 
+// -- Apply inline highlights for quoted comments ----------------------------
+// After setting innerHTML, wrap the first occurrence of each comment's
+// quoted_text in a <mark> that scrolls to the matching comment card.
+function applyHighlights(el: HTMLElement, commentsList: NoteComment[]) {
+  // Remove any existing highlight marks first
+  el.querySelectorAll('mark[data-cid]').forEach(mark => {
+    const parent = mark.parentNode
+    if (parent) {
+      while (mark.firstChild) parent.insertBefore(mark.firstChild, mark)
+      parent.removeChild(mark)
+    }
+  })
+  el.normalize() // merge adjacent text nodes split by previous marks
+
+  // Apply a highlight for each comment that has quoted_text
+  commentsList.forEach(c => {
+    if (!c.quoted_text || c.quoted_text.length < 2) return
+    const qt = c.quoted_text
+
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+    let node: Text | null
+    while ((node = walker.nextNode() as Text | null)) {
+      const text = node.textContent ?? ''
+      const idx  = text.indexOf(qt)
+      if (idx === -1) continue
+
+      // Split: node becomes text-before, qtNode becomes the matched text
+      const qtNode = node.splitText(idx)
+      qtNode.splitText(qt.length) // creates the after-node; qtNode is now just the quote
+
+      const mark = document.createElement('mark')
+      mark.dataset.cid   = c.id
+      mark.style.background    = '#fef3c7'
+      mark.style.borderRadius  = '2px'
+      mark.style.cursor        = 'pointer'
+      mark.style.outline       = '1.5px solid #f59e0b'
+      mark.title               = 'Click to see comment'
+      qtNode.parentNode?.insertBefore(mark, qtNode)
+      mark.appendChild(qtNode)
+
+      mark.addEventListener('click', () => {
+        document.getElementById(`comment-${c.id}`)
+          ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+      })
+      break // only highlight first occurrence per comment
+    }
+  })
+}
+
 export default function NotesClient({
   studentId,
   studentName,
@@ -18,8 +67,9 @@ export default function NotesClient({
   initialComments: NoteComment[]
 }) {
   const supabase = createClient()
-  const commentsEndRef = useRef<HTMLDivElement>(null)
+  const commentsEndRef  = useRef<HTMLDivElement>(null)
   const commentInputRef = useRef<HTMLTextAreaElement>(null)
+  const contentRef      = useRef<HTMLDivElement>(null)
 
   const [content, setContent]       = useState(initialContent)
   const [comments, setComments]     = useState<NoteComment[]>(initialComments)
@@ -29,7 +79,14 @@ export default function NotesClient({
   const [lastUpdated, setLastUpdated] = useState<string | null>(null)
   const [selectionInfo, setSelectionInfo] = useState<SelectionInfo | null>(null)
 
-  // -- Live note updates from teacher ------------------------------------------
+  // -- Render content + highlights whenever content or comments change ------
+  useEffect(() => {
+    if (!contentRef.current) return
+    contentRef.current.innerHTML = content
+    applyHighlights(contentRef.current, comments)
+  }, [content, comments])
+
+  // -- Live note updates from teacher ---------------------------------------
   useEffect(() => {
     const ch = supabase
       .channel(`student-notes-${studentId}`)
@@ -44,13 +101,21 @@ export default function NotesClient({
     return () => { supabase.removeChannel(ch) }
   }, [studentId, supabase])
 
-  // -- Live new comments -------------------------------------------------------
+  // -- Live new comments ----------------------------------------------------
   useEffect(() => {
     const ch = supabase
       .channel(`student-comments-${studentId}`)
       .on('postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'student_note_comments', filter: `student_id=eq.${studentId}` },
         p => setComments(prev => [...prev, p.new as NoteComment]))
+      .on('postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'student_note_comments', filter: `student_id=eq.${studentId}` },
+        p => {
+          const updated = p.new as NoteComment & { resolved?: boolean }
+          if (updated.resolved) {
+            setComments(prev => prev.filter(c => c.id !== updated.id))
+          }
+        })
       .subscribe()
     return () => { supabase.removeChannel(ch) }
   }, [studentId, supabase])
@@ -59,14 +124,14 @@ export default function NotesClient({
     commentsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [comments])
 
-  // -- Text selection → floating "Add Comment" button -------------------------
+  // -- Text selection -> floating "Add Comment" button ----------------------
   const handleMouseUp = () => {
-    const sel = window.getSelection()
+    const sel  = window.getSelection()
     const text = sel?.toString().trim() ?? ''
     if (!text || text.length < 2) { setSelectionInfo(null); return }
 
     const range = sel!.getRangeAt(0)
-    const rect = range.getBoundingClientRect()
+    const rect  = range.getBoundingClientRect()
     setSelectionInfo({ text, x: rect.left + rect.width / 2, y: rect.top - 4 })
   }
 
@@ -84,7 +149,7 @@ export default function NotesClient({
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  // -- Submit comment ----------------------------------------------------------
+  // -- Submit comment -------------------------------------------------------
   const submitComment = async () => {
     const text = newComment.trim()
     if (!text) return
@@ -145,13 +210,13 @@ export default function NotesClient({
           <div className="p-8" onMouseUp={handleMouseUp}>
             {isEmpty ? (
               <p style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                Your teacher hasn&apos;t added any notes yet — check back later!
+                Your teacher hasn&apos;t added any notes yet &mdash; check back later!
               </p>
             ) : (
               <div
+                ref={contentRef}
                 className="master-file-content select-text"
                 style={{ color: 'var(--foreground)', fontSize: '15px', lineHeight: '1.75' }}
-                dangerouslySetInnerHTML={{ __html: content }}
               />
             )}
           </div>
@@ -177,7 +242,7 @@ export default function NotesClient({
                     &ldquo;{quotedText.length > 100 ? quotedText.slice(0, 100) + '...' : quotedText}&rdquo;
                   </div>
                   <button onClick={() => setQuotedText(null)} className="flex-shrink-0 text-xs mt-0.5"
-                    style={{ color: 'var(--text-muted)' }}>✕</button>
+                    style={{ color: 'var(--text-muted)' }}>&#x2715;</button>
                 </div>
               )}
               <textarea
@@ -214,9 +279,12 @@ export default function NotesClient({
                 {comments.map(c => {
                   const isTeacher = c.author_name === 'Teacher'
                   return (
-                    <div key={c.id}
+                    <div
+                      key={c.id}
+                      id={`comment-${c.id}`}
                       className={`rounded-xl p-3 space-y-1.5 ${isTeacher ? 'ml-2' : ''}`}
-                      style={{ background: isTeacher ? 'var(--accent-light)' : 'var(--background)', border: '1px solid var(--border)' }}>
+                      style={{ background: isTeacher ? 'var(--accent-light)' : 'var(--background)', border: '1px solid var(--border)' }}
+                    >
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-semibold"
                           style={{ color: isTeacher ? 'var(--accent)' : 'var(--foreground)' }}>

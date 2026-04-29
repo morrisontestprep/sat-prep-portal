@@ -11,10 +11,11 @@ type Comment = {
   content: string
   quoted_text: string | null
   created_at: string
+  resolved?: boolean
 }
 type SelectedImg = { el: HTMLImageElement; rect: DOMRect }
 
-// ── Highlight colours ──────────────────────────────────────────────────────────
+// -- Highlight colours -------------------------------------------------------
 const HIGHLIGHT_COLORS = [
   { label: 'Yellow',  value: '#fef08a' },
   { label: 'Green',   value: '#bbf7d0' },
@@ -34,9 +35,7 @@ const TEXT_COLORS = [
   { label: 'Gray',    value: '#6b7280' },
 ]
 
-const IMAGE_WIDTHS = ['25%', '50%', '75%', '100%']
-
-// ── Toolbar helpers ────────────────────────────────────────────────────────────
+// -- Toolbar helpers ---------------------------------------------------------
 function Divider() {
   return <div className="w-px h-5 mx-1 flex-shrink-0" style={{ background: 'var(--border)' }} />
 }
@@ -116,7 +115,7 @@ function ColorDropdown({
   )
 }
 
-// ── Main component ─────────────────────────────────────────────────────────────
+// -- Main component ----------------------------------------------------------
 export default function MasterFileModal({
   student,
   onClose,
@@ -125,19 +124,20 @@ export default function MasterFileModal({
   onClose: () => void
 }) {
   const supabase = createClient()
-  const editorRef    = useRef<HTMLDivElement>(null)
-  const debounceRef  = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const editorRef      = useRef<HTMLDivElement>(null)
+  const debounceRef    = useRef<ReturnType<typeof setTimeout> | null>(null)
   const commentsEndRef = useRef<HTMLDivElement>(null)
-  const hadEditsRef  = useRef(false)
+  const hadEditsRef    = useRef(false)
+  const dragHandleRef  = useRef<HTMLDivElement>(null)
 
-  const [saveStatus, setSaveStatus]         = useState<'saved' | 'saving' | 'unsaved'>('saved')
-  const [comments, setComments]             = useState<Comment[]>([])
-  const [newComment, setNewComment]         = useState('')
+  const [saveStatus, setSaveStatus]               = useState<'saved' | 'saving' | 'unsaved'>('saved')
+  const [comments, setComments]                   = useState<Comment[]>([])
+  const [newComment, setNewComment]               = useState('')
   const [submittingComment, setSubmittingComment] = useState(false)
-  const [loaded, setLoaded]                 = useState(false)
-  const [selectedImg, setSelectedImg]       = useState<SelectedImg | null>(null)
+  const [loaded, setLoaded]                       = useState(false)
+  const [selectedImg, setSelectedImg]             = useState<SelectedImg | null>(null)
 
-  // -- Load note ---------------------------------------------------------------
+  // -- Load note -------------------------------------------------------------
   useEffect(() => {
     ;(async () => {
       const { data } = await supabase
@@ -150,7 +150,7 @@ export default function MasterFileModal({
     })()
   }, [student.id, supabase])
 
-  // -- Load comments -----------------------------------------------------------
+  // -- Load comments (unresolved only) ---------------------------------------
   useEffect(() => {
     ;(async () => {
       const { data } = await supabase
@@ -158,7 +158,7 @@ export default function MasterFileModal({
         .select('*')
         .eq('student_id', student.id)
         .order('created_at', { ascending: true })
-      setComments(data ?? [])
+      setComments((data ?? []).filter((c: Comment) => !c.resolved))
     })()
   }, [student.id, supabase])
 
@@ -166,17 +166,28 @@ export default function MasterFileModal({
     commentsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [comments])
 
-  // -- Realtime: new comments --------------------------------------------------
+  // -- Realtime: new comments + resolve updates ------------------------------
   useEffect(() => {
     const ch = supabase
       .channel(`mf-comments-${student.id}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'student_note_comments', filter: `student_id=eq.${student.id}` },
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'student_note_comments', filter: `student_id=eq.${student.id}` },
         p => setComments(prev => [...prev, p.new as Comment]))
+      .on('postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'student_note_comments', filter: `student_id=eq.${student.id}` },
+        p => {
+          const updated = p.new as Comment
+          if (updated.resolved) {
+            setComments(prev => prev.filter(c => c.id !== updated.id))
+          } else {
+            setComments(prev => prev.map(c => c.id === updated.id ? updated : c))
+          }
+        })
       .subscribe()
     return () => { supabase.removeChannel(ch) }
   }, [student.id, supabase])
 
-  // -- Save --------------------------------------------------------------------
+  // -- Save ------------------------------------------------------------------
   const save = useCallback(async () => {
     if (!editorRef.current) return
     setSaveStatus('saving')
@@ -195,7 +206,7 @@ export default function MasterFileModal({
     debounceRef.current = setTimeout(save, 1500)
   }, [save])
 
-  // -- Close: flush save + notify student if there were edits ------------------
+  // -- Close: flush save + notify student if there were edits ---------------
   const handleClose = useCallback(async () => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
     if (hadEditsRef.current) {
@@ -222,7 +233,7 @@ export default function MasterFileModal({
     return () => window.removeEventListener('keydown', h)
   }, [handleClose])
 
-  // -- Editor events -----------------------------------------------------------
+  // -- Editor events ---------------------------------------------------------
   const handleInput = () => scheduleAutoSave()
 
   const handlePaste = (e: React.ClipboardEvent) => {
@@ -239,11 +250,10 @@ export default function MasterFileModal({
     reader.readAsDataURL(file)
   }
 
-  // Image click → resize popover
+  // Image click -> show drag handle
   const handleEditorClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement
     if (target.tagName === 'IMG') {
-      // Deselect any previously selected image
       editorRef.current?.querySelectorAll('img.mf-selected').forEach(el => el.classList.remove('mf-selected'))
       target.classList.add('mf-selected')
       setSelectedImg({ el: target as HTMLImageElement, rect: target.getBoundingClientRect() })
@@ -253,7 +263,38 @@ export default function MasterFileModal({
     }
   }
 
-  // -- Toolbar commands --------------------------------------------------------
+  // -- Image drag-to-resize --------------------------------------------------
+  const startImageDrag = (e: React.MouseEvent) => {
+    if (!selectedImg) return
+    e.preventDefault()
+    e.stopPropagation()
+    const img = selectedImg.el
+    const startX = e.clientX
+    const startW = img.offsetWidth
+
+    const onMove = (me: MouseEvent) => {
+      const newW = Math.max(80, startW + (me.clientX - startX))
+      img.style.width = newW + 'px'
+      img.style.height = 'auto'
+      const r = img.getBoundingClientRect()
+      if (dragHandleRef.current) {
+        dragHandleRef.current.style.top  = (r.bottom - 6) + 'px'
+        dragHandleRef.current.style.left = (r.right  - 6) + 'px'
+      }
+    }
+
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      scheduleAutoSave()
+      setSelectedImg(prev => prev ? { ...prev, rect: prev.el.getBoundingClientRect() } : null)
+    }
+
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
+
+  // -- Toolbar commands ------------------------------------------------------
   const execCmd = (cmd: string, value?: string) => {
     document.execCommand(cmd, false, value)
     editorRef.current?.focus()
@@ -272,15 +313,16 @@ export default function MasterFileModal({
     scheduleAutoSave()
   }
 
-  const resizeImage = (width: string) => {
-    if (!selectedImg) return
-    selectedImg.el.style.width = width
-    selectedImg.el.style.height = 'auto'
-    scheduleAutoSave()
-    setSelectedImg(prev => prev ? { ...prev, rect: selectedImg.el.getBoundingClientRect() } : null)
+  // -- Resolve comment -------------------------------------------------------
+  const resolveComment = async (commentId: string) => {
+    await supabase
+      .from('student_note_comments')
+      .update({ resolved: true })
+      .eq('id', commentId)
+    setComments(prev => prev.filter(c => c.id !== commentId))
   }
 
-  // -- Teacher comment ---------------------------------------------------------
+  // -- Teacher comment -------------------------------------------------------
   const submitComment = async () => {
     const text = newComment.trim()
     if (!text) return
@@ -304,40 +346,20 @@ export default function MasterFileModal({
       style={{ background: 'rgba(0,0,0,0.6)' }}
       onMouseDown={e => { if (e.target === e.currentTarget) handleClose() }}
     >
-      {/* Image resize popover */}
+      {/* Drag-to-resize handle (SE corner of selected image) */}
       {selectedImg && (
         <div
-          className="fixed z-[300] flex items-center gap-1 rounded-xl border shadow-xl px-2 py-1.5"
+          ref={dragHandleRef}
+          title="Drag to resize"
+          className="fixed z-[300] w-3.5 h-3.5 rounded-sm cursor-se-resize shadow-md"
           style={{
-            top: selectedImg.rect.bottom + 6,
-            left: selectedImg.rect.left,
-            background: 'var(--card)',
-            borderColor: 'var(--border)',
+            top:  selectedImg.rect.bottom - 6,
+            left: selectedImg.rect.right  - 6,
+            background: 'var(--accent)',
+            opacity: 0.85,
           }}
-        >
-          <span className="text-xs mr-1" style={{ color: 'var(--text-muted)' }}>Width:</span>
-          {IMAGE_WIDTHS.map(w => (
-            <button
-              key={w}
-              onMouseDown={e => { e.preventDefault(); resizeImage(w) }}
-              className="text-xs px-2 py-1 rounded-lg transition-colors"
-              style={{
-                background: selectedImg.el.style.width === w ? 'var(--accent-light)' : 'var(--background)',
-                color: selectedImg.el.style.width === w ? 'var(--accent)' : 'var(--foreground)',
-                border: '1px solid var(--border)',
-              }}
-            >
-              {w}
-            </button>
-          ))}
-          <button
-            onMouseDown={e => { e.preventDefault(); selectedImg.el.classList.remove('mf-selected'); setSelectedImg(null) }}
-            className="ml-1 w-5 h-5 rounded flex items-center justify-center text-xs"
-            style={{ color: 'var(--text-muted)' }}
-          >
-            ✕
-          </button>
-        </div>
+          onMouseDown={startImageDrag}
+        />
       )}
 
       <div
@@ -345,7 +367,7 @@ export default function MasterFileModal({
         style={{ background: 'var(--background)', minHeight: 0 }}
       >
 
-        {/* ── Editor pane ──────────────────────────────────────────────────── */}
+        {/* ---- Editor pane ------------------------------------------------ */}
         <div className="flex-1 flex flex-col min-w-0">
 
           {/* Header */}
@@ -434,7 +456,7 @@ export default function MasterFileModal({
             </ToolbarBtn>
 
             <span className="ml-auto text-xs flex-shrink-0" style={{ color: 'var(--text-muted)' }}>
-              Paste or click images to resize
+              Paste images &bull; drag corner to resize
             </span>
           </div>
 
@@ -454,7 +476,7 @@ export default function MasterFileModal({
           </div>
         </div>
 
-        {/* ── Comments sidebar ─────────────────────────────────────────────── */}
+        {/* ---- Comments sidebar ------------------------------------------- */}
         <div className="w-72 flex-shrink-0 border-l flex flex-col"
           style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
 
@@ -473,15 +495,27 @@ export default function MasterFileModal({
               const isTeacher = c.author_name === 'Teacher'
               return (
                 <div key={c.id} className="rounded-xl p-3 space-y-1.5"
-                  style={{ background: isTeacher ? 'var(--accent-light)' : 'var(--background)' }}>
+                  style={{ background: isTeacher ? 'var(--accent-light)' : 'var(--background)', border: '1px solid var(--border)' }}>
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold"
                       style={{ color: isTeacher ? 'var(--accent)' : 'var(--foreground)' }}>
                       {c.author_name}
                     </span>
-                    <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                      {new Date(c.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                        {new Date(c.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                      </span>
+                      {!isTeacher && (
+                        <button
+                          onClick={() => resolveComment(c.id)}
+                          title="Resolve and dismiss"
+                          className="text-xs px-1.5 py-0.5 rounded-md transition-colors hover:opacity-80"
+                          style={{ background: 'var(--success)', color: '#fff', fontSize: 10, lineHeight: '1.4' }}
+                        >
+                          Resolve
+                        </button>
+                      )}
+                    </div>
                   </div>
                   {c.quoted_text && (
                     <div className="text-xs italic pl-2 border-l-2"

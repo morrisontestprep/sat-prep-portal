@@ -10,6 +10,7 @@ export type NoteComment = {
   content: string
   quoted_text: string | null
   created_at: string
+  resolved?: boolean
 }
 
 export default async function NotesPage() {
@@ -24,11 +25,12 @@ export default async function NotesPage() {
     .eq('student_id', user.id)
     .maybeSingle()
 
-  // Fetch comments
+  // Fetch unresolved comments only
   const { data: comments } = await supabase
     .from('student_note_comments')
     .select('*')
     .eq('student_id', user.id)
+    .or('resolved.is.null,resolved.eq.false')
     .order('created_at', { ascending: true })
 
   // Fetch student's own profile for their display name
