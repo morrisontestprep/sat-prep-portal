@@ -9,7 +9,7 @@ import type { WorksheetItemRaw, AssignmentRaw, StudentAnswerRaw } from './page'
 import DesmosCalculator from '@/components/DesmosCalculator'
 import ExplanationEditor from '@/components/ExplanationEditor'
 
-// ── Types ────────────────────────────────────────────────────────────────────
+// -- Types --------------------------------------------------------------------
 type Question = {
   id: string; subject: string; domain: string; skill: string; difficulty: string
   question_image_url: string; answer_image_url: string; correct_answer: string
@@ -30,12 +30,12 @@ function rawToBlock(item: WorksheetItemRaw): Block {
   return { type: item.type as 'section_header' | 'note', localId: makeLid(), dbId: item.id, content: item.content ?? '' }
 }
 
-// ── Difficulty badge colours ──────────────────────────────────────────────────
+// -- Difficulty badge colours --------------------------------------------------
 const diffBg   = (d: string) => d === 'Easy' ? '#f0fdf4' : d === 'Medium' ? '#fffbeb' : d === 'Hard' ? '#fef2f2' : '#f3f4f6'
 const diffCol  = (d: string) => d === 'Easy' ? '#16a34a' : d === 'Medium' ? '#d97706' : d === 'Hard' ? '#dc2626' : '#6b7280'
 const diffLabel = (d: string) => d || 'Unrated'
 
-// ── Main component ────────────────────────────────────────────────────────────
+// -- Main component ------------------------------------------------------------
 export default function WorksheetView({
   worksheetId,
   initialTitle,
@@ -73,7 +73,7 @@ export default function WorksheetView({
   const [explanationOpenFor, setExplanationOpenFor] = useState<string | null>(null)
   const [sentExplanations, setSentExplanations] = useState<Set<string>>(new Set())
 
-  // ── Overlay filter state (only meaningful when a student is overlaid) ────────
+  // -- Overlay filter state (only meaningful when a student is overlaid) --------
   const [filterCorrectness, setFilterCorrectness]   = useState<'all' | 'correct' | 'wrong'>('all')
   const [filterDifficulties, setFilterDifficulties] = useState<Set<string>>(new Set())
   const [filterConfidence, setFilterConfidence]     = useState<Set<number>>(new Set())
@@ -124,7 +124,7 @@ export default function WorksheetView({
     if (left) requestAnimationFrame(() => left.scrollTo({ top: target, behavior: 'smooth' }))
   }, [editorTopOffset])
 
-  // ── Resizable columns + right-panel collapse ─────────────────────────────
+  // -- Resizable columns + right-panel collapse ----------------------------─
   const [leftCollapsed,  setLeftCollapsed]  = useState(false)
   const [rightCollapsed, setRightCollapsed] = useState(false)
   const [leftW,  setLeftW]  = useState(320)
@@ -175,7 +175,7 @@ export default function WorksheetView({
     })
   }
 
-  // ── Filter helper ────────────────────────────────────────────────────────────
+  // -- Filter helper ------------------------------------------------------------
   const blockPassesFilter = (block: Block): boolean => {
     if (!selectedAssignmentId) return true
     if (block.type !== 'question') return true
@@ -204,7 +204,7 @@ export default function WorksheetView({
   // Inline "add block" picker state
   const [addMenu, setAddMenu]     = useState<string | null>(null) // localId of block to insert after, or 'top'
 
-  // ── Block manipulation ────────────────────────────────────────────────────
+  // -- Block manipulation ----------------------------------------------------
   const moveBlock = (localId: string, dir: -1 | 1) => {
     setBlocks(prev => {
       const idx = prev.findIndex(b => b.localId === localId)
@@ -240,7 +240,7 @@ export default function WorksheetView({
       return next
     })
 
-  // ── Save (full replace of worksheet_items) ────────────────────────────────
+  // -- Save (full replace of worksheet_items) --------------------------------
   const save = useCallback(async () => {
     setSaving(true)
     setSaved(false)
@@ -291,7 +291,7 @@ export default function WorksheetView({
     setTimeout(() => setSaved(false), 2500)
   }, [supabase, worksheetId, title, blocks])
 
-  // ── Assign ───────────────────────────────────────────────────────────────
+  // -- Assign --------------------------------------------------------------─
   const handleAssign = async () => {
     setAssigning(true)
     await save() // save current state first
@@ -367,7 +367,7 @@ export default function WorksheetView({
   return (
     <div className="flex-1 flex overflow-hidden">
 
-      {/* ── LEFT: Explanation panel ─────────────────────────────────────── */}
+      {/* -- LEFT: Explanation panel --------------------------------------─ */}
       {leftCollapsed ? (
         /* Collapsed strip — click to expand */
         <div
@@ -483,7 +483,7 @@ export default function WorksheetView({
       </div>  {/* end expanded left panel */}
       )}      {/* end leftCollapsed conditional */}
 
-      {/* ── Drag handle: left ↔ center ──────────────────────────────────── */}
+      {/* -- Drag handle: left <-> center ------------------------------------ */}
       {!leftCollapsed && (
       <div
         onMouseDown={e => {
@@ -500,7 +500,7 @@ export default function WorksheetView({
       />
       )}
 
-      {/* ── CENTER: Worksheet document ──────────────────────────────────── */}
+      {/* -- CENTER: Worksheet document ------------------------------------ */}
       <div ref={worksheetScrollRef} className="flex-1 overflow-y-auto">
         {/* Sticky toolbar */}
         <div className="sticky top-0 z-10 border-b flex flex-col"
@@ -709,7 +709,7 @@ export default function WorksheetView({
 
               return (
                 <div key={block.localId} className="group relative">
-                  {/* ── Section header ────────────────────────────────── */}
+                  {/* -- Section header ---------------------------------- */}
                   {block.type === 'section_header' && (
                     <div className="flex items-center gap-3 py-3">
                       <div className="w-1 self-stretch rounded-full flex-shrink-0" style={{ background: 'var(--accent)' }} />
@@ -726,7 +726,7 @@ export default function WorksheetView({
                     </div>
                   )}
 
-                  {/* ── Note / instruction ────────────────────────────── */}
+                  {/* -- Note / instruction ------------------------------ */}
                   {block.type === 'note' && (
                     <div className="flex items-start gap-3 px-4 py-3 rounded-xl my-1" style={{ background: '#fefce8', border: '1px solid #fde68a' }}>
                       <svg className="w-4 h-4 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="#ca8a04">
@@ -745,7 +745,7 @@ export default function WorksheetView({
                     </div>
                   )}
 
-                  {/* ── Question ──────────────────────────────────────── */}
+                  {/* -- Question ---------------------------------------- */}
                   {block.type === 'question' && (
                     <div
                       ref={el => {
@@ -908,7 +908,7 @@ export default function WorksheetView({
         </div>
       </div>
 
-      {/* ── Drag handle: center ↔ right (hidden when collapsed) ────────── */}
+      {/* -- Drag handle: center <-> right (hidden when collapsed) ---------- */}
       {!rightCollapsed && (
         <div
           onMouseDown={e => {
@@ -925,7 +925,7 @@ export default function WorksheetView({
         />
       )}
 
-      {/* ── RIGHT: Assignments sidebar ──────────────────────────────────── */}
+      {/* -- RIGHT: Assignments sidebar ------------------------------------ */}
       {rightCollapsed ? (
         /* Collapsed strip — click to expand */
         <div
@@ -1102,7 +1102,7 @@ export default function WorksheetView({
       </aside>
       )} {/* end rightCollapsed else */}
 
-      {/* ── Assign modal ───────────────────────────────────────────────────── */}
+      {/* -- Assign modal ----------------------------------------------------─ */}
       {showAssign && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.45)' }}>
           <div className="rounded-2xl shadow-2xl w-full max-w-sm p-6" style={{ background: 'var(--card)' }}>
@@ -1167,7 +1167,7 @@ export default function WorksheetView({
   )
 }
 
-// ── Add block button (shows on hover between blocks) ─────────────────────────
+// -- Add block button (shows on hover between blocks) ------------------------─
 function AddBlockButton({ onInsert }: { onInsert: (type: 'section_header' | 'note') => void }) {
   const [open, setOpen] = useState(false)
   return (
@@ -1201,7 +1201,7 @@ function AddBlockButton({ onInsert }: { onInsert: (type: 'section_header' | 'not
   )
 }
 
-// ── Block action buttons (up, down, delete) ──────────────────────────────────
+// -- Block action buttons (up, down, delete) ----------------------------------
 function BlockActions({
   localId, isFirst, isLast, onMove, onRemove
 }: {
