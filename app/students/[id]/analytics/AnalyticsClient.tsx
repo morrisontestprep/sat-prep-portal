@@ -295,13 +295,29 @@ function SubjectSection({ subject }: { subject: SubjectStats }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
+// ── Time bucket config ────────────────────────────────────────────────────────
+const TIME_BUCKETS = [
+  { label: '< 30s',   min: 0,   max: 30   },
+  { label: '30–60s',  min: 30,  max: 60   },
+  { label: '60–90s',  min: 60,  max: 90   },
+  { label: '90–120s', min: 90,  max: 120  },
+  { label: '120s+',   min: 120, max: Infinity },
+]
+
 export default function AnalyticsClient({ student, answers }: Props) {
-  const tree = buildTree(answers)
+  const [confFilter, setConfFilter] = useState<Set<number>>(new Set())
+
+  // Apply confidence filter — when active, only include answers with a matching rating
+  const displayAnswers = confFilter.size === 0
+    ? answers
+    : answers.filter(a => a.confidence_level !== null && confFilter.has(a.confidence_level))
+
+  const tree = buildTree(displayAnswers)
   const subjects = Object.values(tree).sort((a, b) => a.name.localeCompare(b.name))
 
-  const totalAnswered = answers.length
-  const totalCorrect = answers.filter(a => a.is_correct === true).length
-  const totalPct = pct(totalCorrect, totalAnswered)
+  const totalAnswered = displayAnswers.length
+  const totalCorrect  = displayAnswers.filter(a => a.is_correct === true).length
+  const totalPct      = pct(totalCorrect, totalAnswered)
 
   // Weakest skills across all subjects (wrong >= 1, sorted by % desc for worst first)
   const allSkills: SkillStats[] = []
@@ -314,6 +330,18 @@ export default function AnalyticsClient({ student, answers }: Props) {
   }
   allSkills.sort((a, b) => pct(a.correct, a.total) - pct(b.correct, b.total))
   const weakestSkills = allSkills.slice(0, 5)
+
+  // Time distribution
+  const timedAnswers  = displayAnswers.filter(a => a.time_spent_seconds != null)
+  const timeBuckets   = TIME_BUCKETS.map(b => ({
+    label: b.label,
+    count: timedAnswers.filter(a => {
+      const t = a.time_spent_seconds as number
+      return t >= b.min && t < b.max
+    }).length,
+  }))
+  const maxBucketCount = Math.max(...timeBuckets.map(b => b.count), 1)
+  const hasAnyConfidence = answers.some(a => a.confidence_level !== null)
 
   if (answers.length === 0) {
     return (
@@ -344,6 +372,50 @@ export default function AnalyticsClient({ student, answers }: Props) {
         <p className="text-sm mt-0.5" style={{ color: 'var(--text-muted)' }}>{student.email}</p>
       </div>
 
+      {/* Confidence filter — only shown if the student has rated at least one question */}
+      {hasAnyConfidence && (
+        <div className="rounded-2xl border px-5 py-3.5 flex items-center gap-3 flex-wrap"
+          style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
+          <span className="text-xs font-medium flex-shrink-0" style={{ color: 'var(--text-muted)' }}>
+            Filter by confidence:
+          </span>
+          {[1, 2, 3, 4, 5].map(c => {
+            const active = confFilter.has(c)
+            return (
+              <button key={c}
+                title={CONFIDENCE_LABELS[c]}
+                onClick={() => setConfFilter(prev => {
+                  const next = new Set(prev)
+                  if (next.has(c)) next.delete(c); else next.add(c)
+                  return next
+                })}
+                className="text-xs px-2.5 py-1 rounded-lg border transition-colors"
+                style={{
+                  borderColor: active ? 'var(--accent)' : 'var(--border)',
+                  color:       active ? 'var(--accent)' : 'var(--text-muted)',
+                  background:  active ? 'var(--accent-light)' : 'transparent',
+                  fontWeight:  active ? 600 : 400,
+                }}>
+                {c} — {CONFIDENCE_LABELS[c]}
+              </button>
+            )
+          })}
+          {confFilter.size > 0 && (
+            <>
+              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                · {displayAnswers.length} of {answers.length} questions
+              </span>
+              <button
+                onClick={() => setConfFilter(new Set())}
+                className="text-xs px-2 py-1 rounded border"
+                style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
+                Clear
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
       {/* Overall summary bar */}
       <div className="rounded-2xl border px-6 py-5 flex flex-wrap gap-6"
         style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
@@ -364,6 +436,47 @@ export default function AnalyticsClient({ student, answers }: Props) {
           <p className="text-3xl font-bold" style={{ color: '#dc2626' }}>{totalAnswered - totalCorrect}</p>
         </div>
       </div>
+
+      {/* Time distribution */}
+      {timedAnswers.length > 0 && (
+        <div className="rounded-2xl border px-6 py-5"
+          style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
+          <p className="text-xs font-semibold uppercase tracking-wider mb-4"
+            style={{ color: 'var(--text-muted)' }}>
+            Time per question
+          </p>
+          <div className="space-y-2.5">
+            {timeBuckets.map(b => (
+              <div key={b.label} className="flex items-center gap-3">
+                <span className="text-xs font-mono w-16 flex-shrink-0 text-right"
+                  style={{ color: 'var(--text-muted)' }}>
+                  {b.label}
+                </span>
+                <div className="flex-1 h-5 rounded-md overflow-hidden"
+                  style={{ background: 'var(--border)' }}>
+                  <div
+                    className="h-full rounded-md transition-all"
+                    style={{
+                      width: `${Math.round((b.count / maxBucketCount) * 100)}%`,
+                      background: 'var(--accent)',
+                      opacity: 0.75,
+                    }}
+                  />
+                </div>
+                <span className="text-xs tabular-nums w-20 flex-shrink-0"
+                  style={{ color: 'var(--text-muted)' }}>
+                  {b.count} ({timedAnswers.length > 0 ? Math.round((b.count / timedAnswers.length) * 100) : 0}%)
+                </span>
+              </div>
+            ))}
+          </div>
+          {timedAnswers.length < displayAnswers.length && (
+            <p className="text-xs mt-3" style={{ color: 'var(--text-muted)' }}>
+              {timedAnswers.length} of {displayAnswers.length} questions have timing data
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Weakest skills callout */}
       {weakestSkills.length > 0 && (

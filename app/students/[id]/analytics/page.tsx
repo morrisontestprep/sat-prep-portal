@@ -22,6 +22,7 @@ export type AnswerRow = {
   is_correct: boolean | null
   student_notes: string | null
   confidence_level: number | null
+  time_spent_seconds: number | null
 }
 
 export type EnrichedAnswer = AnswerRow & QuestionMeta & {
@@ -93,7 +94,7 @@ export default async function StudentAnalyticsPage({
   const assignmentIds = assignments.map((a: any) => a.id)
   const { data: rawAnswers } = await supabase
     .from('student_answers')
-    .select('assignment_id, question_id, selected_answer, is_correct, student_notes, confidence_level')
+    .select('assignment_id, question_id, selected_answer, is_correct, student_notes, confidence_level, time_spent_seconds')
     .in('assignment_id', assignmentIds)
 
   // ── Build question metadata map: question_id → QuestionMeta + worksheet title

@@ -76,6 +76,7 @@ export default function WorksheetView({
   // ── Overlay filter state (only meaningful when a student is overlaid) ────────
   const [filterCorrectness, setFilterCorrectness]   = useState<'all' | 'correct' | 'wrong'>('all')
   const [filterDifficulties, setFilterDifficulties] = useState<Set<string>>(new Set())
+  const [filterConfidence, setFilterConfidence]     = useState<Set<number>>(new Set())
   const [filterTime, setFilterTime] = useState<{ enabled: boolean; direction: 'gt' | 'lt'; seconds: number }>(
     { enabled: false, direction: 'gt', seconds: 60 }
   )
@@ -84,6 +85,7 @@ export default function WorksheetView({
   useEffect(() => {
     setFilterCorrectness('all')
     setFilterDifficulties(new Set())
+    setFilterConfidence(new Set())
     setFilterTime({ enabled: false, direction: 'gt', seconds: 60 })
   }, [selectedAssignmentId])
 
@@ -180,6 +182,10 @@ export default function WorksheetView({
     if (filterCorrectness === 'correct' && (!sa || !sa.is_correct)) return false
     if (filterCorrectness === 'wrong'   && (!sa ||  sa.is_correct)) return false
     if (filterDifficulties.size > 0 && !filterDifficulties.has(block.question.difficulty)) return false
+    if (filterConfidence.size > 0) {
+      const conf = sa?.confidence_level ?? null
+      if (conf === null || !filterConfidence.has(conf)) return false
+    }
     if (filterTime.enabled) {
       const t = sa?.time_spent_seconds ?? null
       if (t === null) return false
@@ -190,7 +196,7 @@ export default function WorksheetView({
   }
 
   const anyFilterActive = !!selectedAssignmentId && (
-    filterCorrectness !== 'all' || filterDifficulties.size > 0 || filterTime.enabled
+    filterCorrectness !== 'all' || filterDifficulties.size > 0 || filterConfidence.size > 0 || filterTime.enabled
   )
   const filteredQuestionCount = blocks.filter(b => b.type === 'question' && blockPassesFilter(b)).length
 
@@ -543,6 +549,37 @@ export default function WorksheetView({
 
               <div className="w-px h-4 flex-shrink-0" style={{ background: 'var(--border)' }} />
 
+              {/* Confidence filter */}
+              <div className="flex items-center gap-1">
+                <span className="text-xs mr-0.5 flex-shrink-0" style={{ color: 'var(--text-muted)' }}>Conf:</span>
+                {[1, 2, 3, 4, 5].map(c => {
+                  const active = filterConfidence.has(c)
+                  const CONF_LABELS: Record<number, string> = {
+                    1: 'No idea', 2: 'Unsure', 3: 'Somewhat confident', 4: 'Confident', 5: 'Very confident',
+                  }
+                  return (
+                    <button key={c}
+                      title={CONF_LABELS[c]}
+                      onClick={() => setFilterConfidence(prev => {
+                        const next = new Set(prev)
+                        if (next.has(c)) next.delete(c); else next.add(c)
+                        return next
+                      })}
+                      className="text-xs w-6 h-6 rounded-lg border flex items-center justify-center transition-colors"
+                      style={{
+                        borderColor: active ? 'var(--accent)' : 'var(--border)',
+                        color:       active ? 'var(--accent)' : 'var(--text-muted)',
+                        background:  active ? 'var(--accent-light)' : 'transparent',
+                        fontWeight:  active ? 600 : 400,
+                      }}>
+                      {c}
+                    </button>
+                  )
+                })}
+              </div>
+
+              <div className="w-px h-4 flex-shrink-0" style={{ background: 'var(--border)' }} />
+
               {/* Time filter */}
               <div className="flex items-center gap-2">
                 <label className="flex items-center gap-1.5 cursor-pointer select-none">
@@ -589,6 +626,7 @@ export default function WorksheetView({
                     onClick={() => {
                       setFilterCorrectness('all')
                       setFilterDifficulties(new Set())
+                      setFilterConfidence(new Set())
                       setFilterTime({ enabled: false, direction: 'gt', seconds: 60 })
                     }}
                     className="text-xs px-2 py-0.5 rounded border"
