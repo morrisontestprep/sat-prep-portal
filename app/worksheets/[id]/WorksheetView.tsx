@@ -367,7 +367,7 @@ export default function WorksheetView({
   return (
     <div className="flex-1 flex overflow-hidden">
 
-      {/* -- LEFT: Explanation panel --------------------------------------─ */}
+      {/* -- LEFT: Explanation panel --------------------------------------- */}
       {leftCollapsed ? (
         /* Collapsed strip — click to expand */
         <div
@@ -399,8 +399,6 @@ export default function WorksheetView({
             </svg>
           </button>
         </div>
-
-        {/* Scrollable content — ref stays here for scroll-sync */}
         <div
           ref={leftPanelRef}
           className="flex-1 overflow-y-auto">
@@ -431,7 +429,7 @@ export default function WorksheetView({
           </div>
         ) : (
           <>
-            {/* Spacer — pushes editor to match the question's Y position */}
+            {/* Spacer - pushes editor to match the question's Y position */}
             <div style={{ height: editorTopOffset }} />
 
             {/* Sticky block: indicator strip + editor
@@ -458,8 +456,6 @@ export default function WorksheetView({
                   </svg>
                 </button>
               </div>
-
-              {/* Editor — give it a defined height so its internal scroll works */}
               {selStudent && selAssignment && (
                 <div className="flex flex-col" style={{ height: 'calc(100vh - 132px)' }}>
                   <ExplanationEditor
@@ -474,14 +470,12 @@ export default function WorksheetView({
                 </div>
               )}
             </div>
-
-            {/* Bottom spacer so the panel can scroll far enough */}
             <div style={{ height: '100vh' }} />
           </>
         )}
-        </div> {/* end scrollable inner div */}
-      </div>  {/* end expanded left panel */}
-      )}      {/* end leftCollapsed conditional */}
+        </div>
+      </div>
+      )}
 
       {/* -- Drag handle: left <-> center ------------------------------------ */}
       {!leftCollapsed && (
@@ -499,8 +493,6 @@ export default function WorksheetView({
         title="Drag to resize"
       />
       )}
-
-      {/* -- CENTER: Worksheet document ------------------------------------ */}
       <div ref={worksheetScrollRef} className="flex-1 overflow-y-auto">
         {/* Sticky toolbar */}
         <div className="sticky top-0 z-10 border-b flex flex-col"
@@ -533,8 +525,6 @@ export default function WorksheetView({
               </button>
             </div>
           </div>
-
-          {/* Row 2: Filter bar — only when a student overlay is active */}
           {selectedAssignmentId && (
             <div className="px-4 pb-2.5 pt-1 flex items-center gap-2 flex-wrap border-t"
               style={{ borderColor: 'var(--border)' }}>
@@ -649,8 +639,6 @@ export default function WorksheetView({
                   </>
                 )}
               </div>
-
-              {/* Count + reset */}
               {anyFilterActive && (
                 <>
                   <div className="w-px h-4 flex-shrink-0" style={{ background: 'var(--border)' }} />
@@ -673,8 +661,6 @@ export default function WorksheetView({
             </div>
           )}
         </div>
-
-        {/* Document */}
         <div className="px-5 py-8">
           {/* Editable title */}
           <div
@@ -693,8 +679,6 @@ export default function WorksheetView({
               return ` · Assigned to ${distinctCount} student${distinctCount !== 1 ? 's' : ''}`
             })()}
           </p>
-
-          {/* Add block at the top */}
           <AddBlockButton onInsert={type => insertBlock('top', type)} />
 
           {/* Blocks */}
@@ -725,8 +709,6 @@ export default function WorksheetView({
                       <BlockActions localId={block.localId} isFirst={isFirst} isLast={isLast} onMove={moveBlock} onRemove={removeBlock} />
                     </div>
                   )}
-
-                  {/* -- Note / instruction ------------------------------ */}
                   {block.type === 'note' && (
                     <div className="flex items-start gap-3 px-4 py-3 rounded-xl my-1" style={{ background: '#fefce8', border: '1px solid #fde68a' }}>
                       <svg className="w-4 h-4 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="#ca8a04">
@@ -744,8 +726,6 @@ export default function WorksheetView({
                       <BlockActions localId={block.localId} isFirst={isFirst} isLast={isLast} onMove={moveBlock} onRemove={removeBlock} />
                     </div>
                   )}
-
-                  {/* -- Question ---------------------------------------- */}
                   {block.type === 'question' && (
                     <div
                       ref={el => {
@@ -777,8 +757,6 @@ export default function WorksheetView({
                         </span>
                         <BlockActions localId={block.localId} isFirst={isFirst} isLast={isLast} onMove={moveBlock} onRemove={removeBlock} />
                       </div>
-
-                      {/* Question image */}
                       <div className="px-4 pt-4 pb-2">
                         <Image
                           src={block.question.question_image_url}
@@ -788,8 +766,6 @@ export default function WorksheetView({
                           unoptimized
                         />
                       </div>
-
-                      {/* Student answer overlay (when a student is selected in sidebar) */}
                       {selectedAssignmentId && block.type === 'question' && (() => {
                         const sa = selectedAnswersMap[block.question.id]
                         if (!sa) return (
@@ -818,7 +794,6 @@ export default function WorksheetView({
                               )}
                               <span style={{ color: 'var(--text-muted)' }}>{sa.time_spent_seconds}s</span>
                             </div>
-                            {/* Notes row */}
                             {sa.student_notes && (
                               <div className="px-3 py-2 border-t" style={{ background: '#fefce8', borderColor: '#fde68a' }}>
                                 <span className="font-medium" style={{ color: '#92400e' }}>Note: </span>
@@ -828,8 +803,6 @@ export default function WorksheetView({
                           </div>
                         )
                       })()}
-
-                      {/* Answer toggle */}
                       <div className="px-4 pb-3 flex items-center gap-3">
                         <button
                           onClick={() => toggleAnswer(block.localId)}
@@ -843,8 +816,6 @@ export default function WorksheetView({
                           </span>
                         )}
                       </div>
-
-                      {/* Answer image */}
                       {showAnswers.has(block.localId) && block.question.answer_image_url && (
                         <div className="px-4 pb-4 border-t pt-3" style={{ borderColor: 'var(--border)' }}>
                           <p className="text-xs font-medium mb-2" style={{ color: 'var(--text-muted)' }}>Answer</p>
@@ -858,8 +829,6 @@ export default function WorksheetView({
                           />
                         </div>
                       )}
-
-                      {/* Explain button — opens left panel */}
                       {selectedAssignmentId && (() => {
                         const isActive = explanationOpenFor === block.question.id
                         const hasSent  = sentExplanations.has(block.question.id)
@@ -890,8 +859,6 @@ export default function WorksheetView({
                       })()}
                     </div>
                   )}
-
-                  {/* Add block below */}
                   <AddBlockButton onInsert={type => insertBlock(block.localId, type)} />
                 </div>
               )
@@ -907,8 +874,6 @@ export default function WorksheetView({
           )}
         </div>
       </div>
-
-      {/* -- Drag handle: center <-> right (hidden when collapsed) ---------- */}
       {!rightCollapsed && (
         <div
           onMouseDown={e => {
@@ -924,8 +889,6 @@ export default function WorksheetView({
           title="Drag to resize"
         />
       )}
-
-      {/* -- RIGHT: Assignments sidebar ------------------------------------ */}
       {rightCollapsed ? (
         /* Collapsed strip — click to expand */
         <div
@@ -1012,8 +975,6 @@ export default function WorksheetView({
                       {a.status === 'complete' ? `${correctCount}/${totalQuestions} correct` : 'Pending'}
                       {a.status === 'complete' && totalTime > 0 && ` · ${Math.floor(totalTime / 60)}m ${totalTime % 60}s`}
                     </p>
-
-                    {/* Action buttons */}
                     <div className="flex items-center gap-1.5 mt-2">
                       {a.status === 'complete' && totalAnswered > 0 && (
                         <button
@@ -1035,8 +996,6 @@ export default function WorksheetView({
                       </button>
                     </div>
                   </div>
-
-                  {/* Expanded: per-question results */}
                   {isExpanded && a.status === 'complete' && totalAnswered > 0 && (
                     <div className="border-t px-2.5 py-2 space-y-2" style={{ borderColor: 'var(--border)' }}>
                       {questionBlocks.map((block, qIdx) => {
@@ -1100,9 +1059,9 @@ export default function WorksheetView({
           + Assign to student
         </button>
       </aside>
-      )} {/* end rightCollapsed else */}
+      )}
 
-      {/* -- Assign modal ----------------------------------------------------─ */}
+      {/* -- Assign modal ----------------------------------------------------- */}
       {showAssign && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.45)' }}>
           <div className="rounded-2xl shadow-2xl w-full max-w-sm p-6" style={{ background: 'var(--card)' }}>
