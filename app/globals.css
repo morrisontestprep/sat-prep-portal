@@ -19,3 +19,22 @@ body {
   color: var(--foreground);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
+
+/* contentEditable placeholder */
+.master-file-editor:empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+/* Prose styles for the master-file editor and student notes view */
+.master-file-content h1 { font-size: 1.6rem; font-weight: 700; margin: 1rem 0 0.5rem; }
+.master-file-content h2 { font-size: 1.25rem; font-weight: 600; margin: 0.9rem 0 0.4rem; }
+.master-file-content p  { margin: 0.4rem 0; }
+.master-file-content ul { list-style: disc; padding-left: 1.4rem; margin: 0.5rem 0; }
+.master-file-content ol { list-style: decimal; padding-left: 1.4rem; margin: 0.5rem 0; }
+.master-file-content li { margin: 0.2rem 0; }
+.master-file-content img { max-width: 100%; border-radius: 8px; margin: 0.6rem 0; display: block; }
+.master-file-content b, .master-file-content strong { font-weight: 700; }
+.master-file-content i, .master-file-content em { font-style: italic; }
+.master-file-content u { text-decoration: underline; }

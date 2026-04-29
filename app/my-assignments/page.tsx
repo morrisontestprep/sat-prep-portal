@@ -41,7 +41,7 @@ export default async function MyAssignmentsPage() {
 
   // Fetch answer counts for all assignments (completed for scores, pending to detect "in progress")
   const allIds = items.map(a => a.id)
-  let answerStats: Record<string, { correct: number; total: number }> = {}
+  let answerStats: Record<string, { correct: number; answered: number }> = {}
   if (allIds.length > 0) {
     const { data: answers } = await supabase
       .from('student_answers')
@@ -50,9 +50,26 @@ export default async function MyAssignmentsPage() {
 
     if (answers) {
       for (const a of answers) {
-        if (!answerStats[a.assignment_id]) answerStats[a.assignment_id] = { correct: 0, total: 0 }
-        answerStats[a.assignment_id].total++
+        if (!answerStats[a.assignment_id]) answerStats[a.assignment_id] = { correct: 0, answered: 0 }
+        answerStats[a.assignment_id].answered++
         if (a.is_correct) answerStats[a.assignment_id].correct++
+      }
+    }
+  }
+
+  // Fetch real total question counts per worksheet so grades use correct denominator
+  const allWsIds = [...new Set(items.map(a => a.worksheets?.id).filter(Boolean))] as string[]
+  let wsTotals: Record<string, number> = {}
+  if (allWsIds.length > 0) {
+    const { data: wsItems } = await supabase
+      .from('worksheet_items')
+      .select('worksheet_id')
+      .in('worksheet_id', allWsIds)
+      .eq('type', 'question')
+
+    if (wsItems) {
+      for (const wi of wsItems) {
+        wsTotals[wi.worksheet_id] = (wsTotals[wi.worksheet_id] ?? 0) + 1
       }
     }
   }
@@ -109,6 +126,7 @@ export default async function MyAssignmentsPage() {
               const ws = latestAttempt.worksheets
               const latestComplete = latestAttempt.status === 'complete'
               const latestStats = answerStats[latestAttempt.id]
+              const wsTotalQs = ws ? (wsTotals[ws.id] ?? latestStats?.answered ?? 0) : 0
               const maxAttempt = Math.max(...attempts.map(a => a.attempt_number ?? 1))
               const assignedDate = new Date(attempts[attempts.length - 1].assigned_at).toLocaleDateString('en-US', {
                 month: 'short', day: 'numeric', year: 'numeric',
@@ -131,17 +149,17 @@ export default async function MyAssignmentsPage() {
                       </div>
 
                       <div className="flex items-center gap-2 flex-shrink-0">
-                        {latestComplete && latestStats && (
+                        {latestComplete && latestStats && wsTotalQs > 0 && (
                           <span className="text-sm font-bold"
-                            style={{ color: latestStats.correct / latestStats.total >= 0.7 ? '#16a34a' : latestStats.correct / latestStats.total >= 0.5 ? '#ca8a04' : '#dc2626' }}>
-                            {Math.round((latestStats.correct / latestStats.total) * 100)}%
+                            style={{ color: latestStats.correct / wsTotalQs >= 0.7 ? '#16a34a' : latestStats.correct / wsTotalQs >= 0.5 ? '#ca8a04' : '#dc2626' }}>
+                            {Math.round((latestStats.correct / wsTotalQs) * 100)}%
                           </span>
                         )}
                         <Link
                           href={`/take/${latestAttempt.id}`}
                           className="text-xs px-3 py-1.5 rounded-lg font-medium text-white"
                           style={{ background: latestComplete ? 'var(--text-muted)' : 'var(--accent)' }}>
-                          {latestComplete ? 'View Results' : (answerStats[latestAttempt.id]?.total ?? 0) > 0 ? 'Continue' : 'Start'}
+                          {latestComplete ? 'View Results' : (answerStats[latestAttempt.id]?.answered ?? 0) > 0 ? 'Continue' : 'Start'}
                         </Link>
                         {latestComplete && ws && (
                           <AssignmentActions
@@ -163,6 +181,7 @@ export default async function MyAssignmentsPage() {
                       <div className="space-y-1.5">
                         {attempts.map(a => {
                           const stats = answerStats[a.id]
+                          const aTotalQs = ws ? (wsTotals[ws.id] ?? stats?.answered ?? 0) : 0
                           return (
                             <Link key={a.id} href={`/take/${a.id}`}
                               className="flex items-center justify-between py-1.5 px-2 rounded-lg hover:opacity-80 transition-opacity">
@@ -175,10 +194,10 @@ export default async function MyAssignmentsPage() {
                                 </span>
                               </div>
                               <div className="flex items-center gap-2">
-                                {a.status === 'complete' && stats ? (
+                                {a.status === 'complete' && stats && aTotalQs > 0 ? (
                                   <span className="text-xs font-medium"
-                                    style={{ color: stats.correct / stats.total >= 0.7 ? '#16a34a' : stats.correct / stats.total >= 0.5 ? '#ca8a04' : '#dc2626' }}>
-                                    {stats.correct}/{stats.total} ({Math.round((stats.correct / stats.total) * 100)}%)
+                                    style={{ color: stats.correct / aTotalQs >= 0.7 ? '#16a34a' : stats.correct / aTotalQs >= 0.5 ? '#ca8a04' : '#dc2626' }}>
+                                    {stats.correct}/{aTotalQs} ({Math.round((stats.correct / aTotalQs) * 100)}%)
                                   </span>
                                 ) : (
                                   <span className="text-xs" style={{ color: 'var(--text-muted)' }}>

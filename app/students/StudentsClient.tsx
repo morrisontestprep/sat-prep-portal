@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
+import MasterFileModal from '@/components/MasterFileModal'
 
 type Assignment = {
   id: string
@@ -28,6 +29,7 @@ function StudentCard({ student, assignments, onDeleted }: { student: Student; as
   const [expanded, setExpanded] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [showMasterFile, setShowMasterFile] = useState(false)
   const completedCount = assignments.filter(a => a.status === 'complete').length
   const pendingCount = assignments.filter(a => a.status === 'pending').length
   const joinedDate = new Date(student.created_at).toLocaleDateString('en-US', {
@@ -77,6 +79,16 @@ function StudentCard({ student, assignments, onDeleted }: { student: Student; as
         </div>
 
         <div className="flex items-center gap-4 flex-shrink-0">
+          {/* Master File button */}
+          <button
+            onClick={e => { e.stopPropagation(); setShowMasterFile(true) }}
+            className="text-xs px-2.5 py-1 rounded-lg font-medium flex-shrink-0 border transition-colors"
+            style={{ borderColor: 'var(--border)', color: 'var(--foreground)', background: 'var(--background)' }}
+            title="Open master file for this student"
+          >
+            Master File
+          </button>
+
           {/* Stats badges */}
           <div className="flex items-center gap-2">
             <span className="text-xs px-2 py-0.5 rounded-full"
@@ -192,6 +204,11 @@ function StudentCard({ student, assignments, onDeleted }: { student: Student; as
         </div>
       )}
     </div>
+
+    {/* Master File modal */}
+    {showMasterFile && (
+      <MasterFileModal student={student} onClose={() => setShowMasterFile(false)} />
+    )}
 
     {/* Delete confirmation modal */}
     {showDeleteConfirm && (

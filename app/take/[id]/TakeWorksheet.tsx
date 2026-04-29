@@ -574,7 +574,7 @@ export default function TakeWorksheet({
             <div
               ref={reviewPanelRef}
               className="flex-shrink-0 min-h-0 overflow-y-auto"
-              style={{ width: reviewPanelW, background: 'var(--background)' }}>
+              style={{ width: reviewPanelW, background: 'var(--background)', overscrollBehavior: 'contain' }}>
               {reviewExp.length > 0 ? (
                 <div className="px-4 py-4 space-y-4">
                   <p className="text-xs font-semibold uppercase tracking-wider"
