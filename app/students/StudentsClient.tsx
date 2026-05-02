@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
+import { createClient } from '@/utils/supabase/client'
 import MasterFileModal from '@/components/MasterFileModal'
 
 type Assignment = {
@@ -20,18 +21,47 @@ type Student = {
   created_at: string
 }
 
+type GuideInfo = {
+  id: string
+  title: string
+  subject: string | null
+  domain: string | null
+}
+
 type Props = {
   students: Student[]
   assignmentsByStudent: Record<string, Assignment[]>
+  allGuides: GuideInfo[]
+  sharesByStudent: Record<string, string[]>
 }
 
-function StudentCard({ student, assignments, onDeleted }: { student: Student; assignments: Assignment[]; onDeleted: (id: string) => void }) {
-  const [expanded, setExpanded] = useState(false)
+const SUBJECT_COLORS: Record<string, { bg: string; color: string }> = {
+  'Math':             { bg: '#ede9fe', color: '#7c3aed' },
+  'English':          { bg: '#dbeafe', color: '#1d4ed8' },
+  'General Strategy': { bg: '#dcfce7', color: '#16a34a' },
+}
+
+function StudentCard({
+  student, assignments, allGuides, initialSharedIds, onDeleted,
+}: {
+  student: Student
+  assignments: Assignment[]
+  allGuides: GuideInfo[]
+  initialSharedIds: string[]
+  onDeleted: (id: string) => void
+}) {
+  const supabase = createClient()
+  const [expanded, setExpanded]           = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
-  const [deleting, setDeleting] = useState(false)
+  const [deleting, setDeleting]           = useState(false)
   const [showMasterFile, setShowMasterFile] = useState(false)
+  const [showGuides, setShowGuides]       = useState(false)
+  const [sharedIds, setSharedIds]         = useState<Set<string>>(new Set(initialSharedIds))
+  const [togglingId, setTogglingId]       = useState<string | null>(null)
+  const [notifyOnShare, setNotifyOnShare] = useState(true)
+
   const completedCount = assignments.filter(a => a.status === 'complete').length
-  const pendingCount = assignments.filter(a => a.status === 'pending').length
+  const pendingCount   = assignments.filter(a => a.status === 'pending').length
   const joinedDate = new Date(student.created_at).toLocaleDateString('en-US', {
     month: 'short', day: 'numeric', year: 'numeric',
   })
@@ -43,27 +73,52 @@ function StudentCard({ student, assignments, onDeleted }: { student: Student; as
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ studentId: student.id }),
     })
-    if (!res.ok) {
-      alert('Failed to delete student. Please try again.')
-      setDeleting(false)
-      return
-    }
+    if (!res.ok) { alert('Failed to delete student. Please try again.'); setDeleting(false); return }
     onDeleted(student.id)
   }
+
+  const toggleGuide = async (guide: GuideInfo) => {
+    setTogglingId(guide.id)
+    const isShared = sharedIds.has(guide.id)
+
+    if (isShared) {
+      await supabase.from('guide_shares').delete()
+        .eq('guide_id', guide.id).eq('student_id', student.id)
+      setSharedIds(prev => { const s = new Set(prev); s.delete(guide.id); return s })
+    } else {
+      await supabase.from('guide_shares')
+        .upsert({ guide_id: guide.id, student_id: student.id }, { onConflict: 'guide_id,student_id', ignoreDuplicates: true })
+      setSharedIds(prev => new Set([...prev, guide.id]))
+      if (notifyOnShare && student.email) {
+        fetch('/api/notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 'guide_share',
+            studentEmail: student.email,
+            studentName: student.full_name || student.email,
+            guideTitle: guide.title,
+          }),
+        }).catch(console.error)
+      }
+    }
+    setTogglingId(null)
+  }
+
+  const sharedCount = allGuides.filter(g => sharedIds.has(g.id)).length
 
   return (
     <>
     <div className="rounded-2xl border overflow-hidden group"
       style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
 
-      {/* Student header — clicking toggles the worksheet list */}
+      {/* Student header row */}
       <div
         className="px-6 py-4 flex items-center justify-between gap-4 cursor-pointer select-none"
         onClick={() => assignments.length > 0 && setExpanded(e => !e)}
         style={{ userSelect: 'none' }}
       >
         <div className="flex items-center gap-4 min-w-0">
-          {/* Avatar */}
           <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 text-sm font-semibold text-white"
             style={{ background: 'var(--accent)' }}>
             {(student.full_name || student.email || '?').charAt(0).toUpperCase()}
@@ -72,21 +127,37 @@ function StudentCard({ student, assignments, onDeleted }: { student: Student; as
             <p className="font-semibold text-sm truncate" style={{ color: 'var(--foreground)' }}>
               {student.full_name || 'No name'}
             </p>
-            <p className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>
-              {student.email}
-            </p>
+            <p className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>{student.email}</p>
           </div>
         </div>
 
-        <div className="flex items-center gap-4 flex-shrink-0">
+        <div className="flex items-center gap-3 flex-shrink-0">
           {/* Master File button */}
           <button
             onClick={e => { e.stopPropagation(); setShowMasterFile(true) }}
-            className="text-xs px-2.5 py-1 rounded-lg font-medium flex-shrink-0 border transition-colors"
+            className="text-xs px-2.5 py-1 rounded-lg font-medium border transition-colors"
             style={{ borderColor: 'var(--border)', color: 'var(--foreground)', background: 'var(--background)' }}
-            title="Open master file for this student"
           >
             Master File
+          </button>
+
+          {/* Guides button */}
+          <button
+            onClick={e => { e.stopPropagation(); setShowGuides(o => !o) }}
+            className="text-xs px-2.5 py-1 rounded-lg font-medium border transition-colors flex items-center gap-1.5"
+            style={{
+              borderColor: showGuides ? 'var(--accent)' : 'var(--border)',
+              color: showGuides ? 'var(--accent)' : 'var(--foreground)',
+              background: showGuides ? 'var(--accent-light)' : 'var(--background)',
+            }}
+          >
+            Guides
+            {sharedCount > 0 && (
+              <span className="px-1.5 py-0 rounded-full text-white leading-5"
+                style={{ background: 'var(--accent)', fontSize: 10 }}>
+                {sharedCount}
+              </span>
+            )}
           </button>
 
           {/* Stats badges */}
@@ -96,47 +167,33 @@ function StudentCard({ student, assignments, onDeleted }: { student: Student; as
               {assignments.length} assigned
             </span>
             {completedCount > 0 && (
-              <span className="text-xs px-2 py-0.5 rounded-full"
-                style={{ background: '#f0fdf4', color: '#16a34a' }}>
+              <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: '#f0fdf4', color: '#16a34a' }}>
                 {completedCount} complete
               </span>
             )}
             {pendingCount > 0 && (
-              <span className="text-xs px-2 py-0.5 rounded-full"
-                style={{ background: '#fffbeb', color: '#d97706' }}>
+              <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: '#fffbeb', color: '#d97706' }}>
                 {pendingCount} pending
               </span>
             )}
           </div>
-          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-            Joined {joinedDate}
-          </span>
+          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Joined {joinedDate}</span>
 
-          {/* Chevron — only shown if there are assignments */}
           {assignments.length > 0 && (
-            <svg
-              className="w-4 h-4 flex-shrink-0 transition-transform duration-200"
-              style={{
-                color: 'var(--text-muted)',
-                transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)',
-              }}
+            <svg className="w-4 h-4 flex-shrink-0 transition-transform duration-200"
+              style={{ color: 'var(--text-muted)', transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)' }}
               fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
             </svg>
           )}
 
-          {/* Analytics button */}
-          <Link
-            href={`/students/${student.id}/analytics`}
-            onClick={e => e.stopPropagation()}
+          <Link href={`/students/${student.id}/analytics`} onClick={e => e.stopPropagation()}
             className="text-xs px-2.5 py-1 rounded-lg font-medium flex-shrink-0"
             style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
             Analytics
           </Link>
 
-          {/* Delete button */}
-          <button
-            onClick={e => { e.stopPropagation(); setShowDeleteConfirm(true) }}
+          <button onClick={e => { e.stopPropagation(); setShowDeleteConfirm(true) }}
             title="Remove student"
             className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
             style={{ background: '#fef2f2', color: '#ef4444' }}>
@@ -147,6 +204,73 @@ function StudentCard({ student, assignments, onDeleted }: { student: Student; as
           </button>
         </div>
       </div>
+
+      {/* Guides panel */}
+      {showGuides && (
+        <div className="border-t" style={{ borderColor: 'var(--border)' }}>
+          <div className="px-6 py-3 flex items-center justify-between" style={{ background: 'var(--background)' }}>
+            <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+              Instructional Guides
+            </p>
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: 'var(--text-muted)' }}>
+              <input
+                type="checkbox"
+                checked={notifyOnShare}
+                onChange={e => setNotifyOnShare(e.target.checked)}
+              />
+              Notify student when sharing
+            </label>
+          </div>
+          {allGuides.length === 0 ? (
+            <p className="px-6 py-4 text-sm" style={{ color: 'var(--text-muted)' }}>No guides created yet.</p>
+          ) : (
+            <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
+              {allGuides.map(guide => {
+                const isShared  = sharedIds.has(guide.id)
+                const toggling  = togglingId === guide.id
+                const subStyle  = guide.subject ? SUBJECT_COLORS[guide.subject] : null
+                return (
+                  <div key={guide.id} className="px-6 py-3 flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      {subStyle ? (
+                        <span className="text-xs px-2 py-0.5 rounded-full flex-shrink-0 font-medium"
+                          style={{ background: subStyle.bg, color: subStyle.color }}>
+                          {guide.subject}
+                        </span>
+                      ) : (
+                        <span className="text-xs px-2 py-0.5 rounded-full flex-shrink-0"
+                          style={{ background: 'var(--background)', color: 'var(--text-muted)', border: '1px solid var(--border)' }}>
+                          General
+                        </span>
+                      )}
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate" style={{ color: 'var(--foreground)' }}>
+                          {guide.title}
+                        </p>
+                        {guide.domain && (
+                          <p className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>{guide.domain}</p>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => toggleGuide(guide)}
+                      disabled={toggling}
+                      className="flex-shrink-0 text-xs px-3 py-1 rounded-lg font-medium transition-colors disabled:opacity-50"
+                      style={isShared ? {
+                        background: '#f0fdf4', color: '#16a34a', border: '1px solid #bbf7d0',
+                      } : {
+                        background: 'var(--accent)', color: '#fff',
+                      }}
+                    >
+                      {toggling ? '...' : isShared ? 'Shared' : 'Share'}
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Collapsible assignments list */}
       {expanded && assignments.length > 0 && (
@@ -164,15 +288,11 @@ function StudentCard({ student, assignments, onDeleted }: { student: Student; as
               {assignments.map((a, i) => {
                 const ws = a.worksheets as { id: string; title: string } | null
                 return (
-                  <tr key={a.id}
-                    className={i < assignments.length - 1 ? 'border-b' : ''}
-                    style={{ borderColor: 'var(--border)' }}>
+                  <tr key={a.id} className={i < assignments.length - 1 ? 'border-b' : ''} style={{ borderColor: 'var(--border)' }}>
                     <td className="px-6 py-2.5">
                       {ws ? (
-                        <Link href={`/worksheets/${ws.id}`}
-                          className="hover:underline truncate block max-w-xs"
-                          style={{ color: 'var(--accent)' }}
-                          onClick={e => e.stopPropagation()}>
+                        <Link href={`/worksheets/${ws.id}`} className="hover:underline truncate block max-w-xs"
+                          style={{ color: 'var(--accent)' }} onClick={e => e.stopPropagation()}>
                           {ws.title}
                         </Link>
                       ) : (
@@ -183,9 +303,7 @@ function StudentCard({ student, assignments, onDeleted }: { student: Student; as
                       {new Date(a.assigned_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                     </td>
                     <td className="px-4 py-2.5" style={{ color: 'var(--text-muted)' }}>
-                      {a.due_date
-                        ? new Date(a.due_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-                        : '—'}
+                      {a.due_date ? new Date(a.due_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}
                     </td>
                     <td className="px-4 py-2.5">
                       <span className="text-xs px-2 py-0.5 rounded-full"
@@ -205,20 +323,13 @@ function StudentCard({ student, assignments, onDeleted }: { student: Student; as
       )}
     </div>
 
-    {/* Master File modal */}
-    {showMasterFile && (
-      <MasterFileModal student={student} onClose={() => setShowMasterFile(false)} />
-    )}
+    {showMasterFile && <MasterFileModal student={student} onClose={() => setShowMasterFile(false)} />}
 
-    {/* Delete confirmation modal */}
     {showDeleteConfirm && (
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
-        style={{ background: 'rgba(0,0,0,0.5)' }}>
-        <div className="rounded-2xl shadow-2xl w-full max-w-sm p-6"
-          style={{ background: 'var(--card)' }}>
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.5)' }}>
+        <div className="rounded-2xl shadow-2xl w-full max-w-sm p-6" style={{ background: 'var(--card)' }}>
           <div className="flex items-center gap-3 mb-4">
-            <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0"
-              style={{ background: '#fef2f2' }}>
+            <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: '#fef2f2' }}>
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="#ef4444">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                   d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -229,8 +340,7 @@ function StudentCard({ student, assignments, onDeleted }: { student: Student; as
               <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>This cannot be undone.</p>
             </div>
           </div>
-          <p className="text-sm mb-2 rounded-lg px-3 py-2.5"
-            style={{ background: 'var(--background)', color: 'var(--foreground)' }}>
+          <p className="text-sm mb-2 rounded-lg px-3 py-2.5" style={{ background: 'var(--background)', color: 'var(--foreground)' }}>
             {student.full_name || student.email}
           </p>
           <p className="text-xs mb-5" style={{ color: 'var(--text-muted)' }}>
@@ -255,15 +365,13 @@ function StudentCard({ student, assignments, onDeleted }: { student: Student; as
   )
 }
 
-export default function StudentsClient({ students: initialStudents, assignmentsByStudent }: Props) {
+export default function StudentsClient({ students: initialStudents, assignmentsByStudent, allGuides, sharesByStudent }: Props) {
   const [students, setStudents] = useState(initialStudents)
-
   const handleDeleted = (id: string) => setStudents(prev => prev.filter(s => s.id !== id))
 
   if (students.length === 0) {
     return (
-      <div className="text-center py-20 rounded-2xl border-2 border-dashed"
-        style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
+      <div className="text-center py-20 rounded-2xl border-2 border-dashed" style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
         <svg className="w-12 h-12 mx-auto mb-3 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
         </svg>
@@ -280,6 +388,8 @@ export default function StudentsClient({ students: initialStudents, assignmentsB
           key={student.id}
           student={student}
           assignments={assignmentsByStudent[student.id] ?? []}
+          allGuides={allGuides}
+          initialSharedIds={sharesByStudent[student.id] ?? []}
           onDeleted={handleDeleted}
         />
       ))}

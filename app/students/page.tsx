@@ -28,6 +28,17 @@ export default async function StudentsPage() {
     `)
     .order('assigned_at', { ascending: false })
 
+  // Fetch all guides (for the per-student guide panel)
+  const { data: allGuides } = await supabase
+    .from('instructional_guides')
+    .select('id, title, subject, domain')
+    .order('updated_at', { ascending: false })
+
+  // Fetch all guide shares
+  const { data: allShares } = await supabase
+    .from('guide_shares')
+    .select('guide_id, student_id')
+
   // Group assignments by student
   type Assignment = {
     id: string
@@ -42,6 +53,13 @@ export default async function StudentsPage() {
   for (const a of (allAssignments ?? []) as unknown as Assignment[]) {
     if (!assignmentsByStudent[a.student_id]) assignmentsByStudent[a.student_id] = []
     assignmentsByStudent[a.student_id].push(a)
+  }
+
+  // Build sharesByStudent: { studentId: guideId[] }
+  const sharesByStudent: Record<string, string[]> = {}
+  for (const s of (allShares ?? []) as { guide_id: string; student_id: string }[]) {
+    if (!sharesByStudent[s.student_id]) sharesByStudent[s.student_id] = []
+    sharesByStudent[s.student_id].push(s.guide_id)
   }
 
   return (
@@ -61,6 +79,8 @@ export default async function StudentsPage() {
         <StudentsClient
           students={students ?? []}
           assignmentsByStudent={assignmentsByStudent}
+          allGuides={(allGuides ?? []) as { id: string; title: string; subject: string | null; domain: string | null }[]}
+          sharesByStudent={sharesByStudent}
         />
       </main>
     </div>

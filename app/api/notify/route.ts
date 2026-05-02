@@ -7,6 +7,7 @@ import {
   sendNotesUpdatedNotification,
   sendStudentCommentNotification,
   sendNewGuideNotification,
+  sendGuideSharedNotification,
 } from '@/utils/email'
 
 export async function POST(request: Request) {
@@ -79,6 +80,12 @@ export async function POST(request: Request) {
     if (type === 'student_comment') {
       const { studentName, commentText, quotedText } = body
       await sendStudentCommentNotification(studentName, commentText, quotedText ?? null)
+      return NextResponse.json({ ok: true })
+    }
+
+    if (type === 'guide_share') {
+      const { studentEmail, studentName, guideTitle } = body
+      await sendGuideSharedNotification(studentEmail, studentName, guideTitle)
       return NextResponse.json({ ok: true })
     }
 

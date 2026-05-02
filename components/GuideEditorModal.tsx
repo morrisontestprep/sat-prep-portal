@@ -7,12 +7,28 @@ export type Guide = {
   id: string
   title: string
   subject: string | null
+  domain: string | null
   content: string
   created_at: string
   updated_at: string
 }
 
 const SUBJECTS = ['General Strategy', 'Math', 'English']
+
+const DOMAINS_BY_SUBJECT: Record<string, string[]> = {
+  'Math': [
+    'Algebra',
+    'Advanced Math',
+    'Geometry and Trigonometry',
+    'Problem-Solving and Data Analysis',
+  ],
+  'English': [
+    'Craft and Structure',
+    'Information and Ideas',
+    'Standard English Conventions',
+    'Expression of Ideas',
+  ],
+}
 
 const HIGHLIGHT_COLORS = [
   { label: 'Yellow',  value: '#fef08a' },
@@ -131,6 +147,7 @@ export default function GuideEditorModal({
 
   const [title, setTitle]           = useState(guide.title)
   const [subject, setSubject]       = useState(guide.subject ?? '')
+  const [domain, setDomain]         = useState(guide.domain ?? '')
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>('saved')
   const [loaded, setLoaded]         = useState(false)
   const [selectedImg, setSelectedImg] = useState<{ el: HTMLImageElement; rect: DOMRect } | null>(null)
@@ -142,8 +159,13 @@ export default function GuideEditorModal({
   const [eqDisplay, setEqDisplay]   = useState(false)
   const [eqPreview, setEqPreview]   = useState('')
 
-  // Notify state
-  const [notifyStatus, setNotifyStatus] = useState<'idle' | 'sending' | 'done'>('idle')
+  // Share panel state
+  const [showSharePanel, setShowSharePanel] = useState(false)
+  const [shareStudents, setShareStudents]   = useState<{ id: string; full_name: string | null; email: string | null }[]>([])
+  const [sharedIds, setSharedIds]           = useState<Set<string>>(new Set())
+  const [loadingShare, setLoadingShare]     = useState(false)
+  const [togglingId, setTogglingId]         = useState<string | null>(null)
+  const [notifyOnShare, setNotifyOnShare]   = useState(true)
 
   // -- Load KaTeX from CDN ---------------------------------------------------
   useEffect(() => {
@@ -238,13 +260,23 @@ export default function GuideEditorModal({
     titleDebRef.current = setTimeout(() => saveTitle(val), 1000)
   }
 
-  // -- Save subject ----------------------------------------------------------
+  // -- Save subject (also resets domain) ------------------------------------
   const handleSubjectChange = async (val: string) => {
     setSubject(val)
+    setDomain('')
     await supabase.from('instructional_guides')
-      .update({ subject: val || null, updated_at: new Date().toISOString() })
+      .update({ subject: val || null, domain: null, updated_at: new Date().toISOString() })
       .eq('id', guide.id)
-    onSaved({ ...guide, subject: val || null })
+    onSaved({ ...guide, subject: val || null, domain: null })
+  }
+
+  // -- Save domain -----------------------------------------------------------
+  const handleDomainChange = async (val: string) => {
+    setDomain(val)
+    await supabase.from('instructional_guides')
+      .update({ domain: val || null, updated_at: new Date().toISOString() })
+      .eq('id', guide.id)
+    onSaved({ ...guide, domain: val || null })
   }
 
   // -- Close -----------------------------------------------------------------
@@ -341,16 +373,44 @@ export default function GuideEditorModal({
     setEqInput('')
   }
 
-  // -- Notify students -------------------------------------------------------
-  const notifyStudents = async () => {
-    setNotifyStatus('sending')
-    await fetch('/api/notify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'new_guide', guideTitle: title }),
-    })
-    setNotifyStatus('done')
-    setTimeout(() => setNotifyStatus('idle'), 3000)
+  // -- Share panel -----------------------------------------------------------
+  const openSharePanel = async () => {
+    setShowSharePanel(true)
+    if (shareStudents.length > 0) return // already loaded
+    setLoadingShare(true)
+    const [{ data: studs }, { data: shares }] = await Promise.all([
+      supabase.from('profiles').select('id, full_name, email').eq('role', 'student').order('full_name'),
+      supabase.from('guide_shares').select('student_id').eq('guide_id', guide.id),
+    ])
+    setShareStudents(studs ?? [])
+    setSharedIds(new Set((shares ?? []).map((s: { student_id: string }) => s.student_id)))
+    setLoadingShare(false)
+  }
+
+  const toggleShare = async (student: { id: string; full_name: string | null; email: string | null }) => {
+    setTogglingId(student.id)
+    const isShared = sharedIds.has(student.id)
+    if (isShared) {
+      await supabase.from('guide_shares').delete().eq('guide_id', guide.id).eq('student_id', student.id)
+      setSharedIds(prev => { const s = new Set(prev); s.delete(student.id); return s })
+    } else {
+      await supabase.from('guide_shares')
+        .upsert({ guide_id: guide.id, student_id: student.id }, { onConflict: 'guide_id,student_id', ignoreDuplicates: true })
+      setSharedIds(prev => new Set([...prev, student.id]))
+      if (notifyOnShare && student.email) {
+        fetch('/api/notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 'guide_share',
+            studentEmail: student.email,
+            studentName: student.full_name || student.email,
+            guideTitle: title,
+          }),
+        }).catch(console.error)
+      }
+    }
+    setTogglingId(null)
   }
 
   return (
@@ -396,19 +456,44 @@ export default function GuideEditorModal({
             {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
 
+          {/* Domain — only shown when subject has domains */}
+          {DOMAINS_BY_SUBJECT[subject] && (
+            <select
+              value={domain}
+              onChange={e => handleDomainChange(e.target.value)}
+              className="text-sm px-3 py-1.5 rounded-lg border outline-none"
+              style={{ borderColor: 'var(--border)', background: 'var(--background)', color: 'var(--foreground)' }}
+            >
+              <option value="">All domains</option>
+              {DOMAINS_BY_SUBJECT[subject].map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+          )}
+
           {/* Save status */}
           <span className="text-xs flex-shrink-0" style={{ color: saveStatus === 'unsaved' ? 'var(--warning)' : 'var(--text-muted)' }}>
             {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'unsaved' ? 'Unsaved' : 'Saved'}
           </span>
 
-          {/* Notify button */}
+          {/* Share button */}
           <button
-            onClick={notifyStudents}
-            disabled={notifyStatus !== 'idle'}
-            className="flex-shrink-0 px-3 py-1.5 rounded-lg text-sm font-medium text-white disabled:opacity-60 transition-colors"
-            style={{ background: notifyStatus === 'done' ? 'var(--success)' : 'var(--accent)' }}
+            onClick={() => showSharePanel ? setShowSharePanel(false) : openSharePanel()}
+            className="flex-shrink-0 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5"
+            style={{
+              background: showSharePanel ? 'var(--accent-light)' : 'var(--accent)',
+              color: showSharePanel ? 'var(--accent)' : '#fff',
+              border: showSharePanel ? '1px solid var(--accent)' : 'none',
+            }}
           >
-            {notifyStatus === 'sending' ? 'Sending...' : notifyStatus === 'done' ? 'Notified!' : 'Notify Students'}
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+            </svg>
+            Share
+            {sharedIds.size > 0 && (
+              <span className="px-1.5 rounded-full text-white leading-5"
+                style={{ background: showSharePanel ? 'var(--accent)' : 'rgba(255,255,255,0.3)', fontSize: 10 }}>
+                {sharedIds.size}
+              </span>
+            )}
           </button>
 
           {/* Close */}
@@ -536,19 +621,79 @@ export default function GuideEditorModal({
           </span>
         </div>
 
-        {/* ---- Editor body ----------------------------------------------- */}
-        <div className="flex-1 overflow-y-auto px-12 py-8">
-          <div
-            ref={editorRef}
-            contentEditable={loaded}
-            suppressContentEditableWarning
-            onInput={() => scheduleAutoSave()}
-            onPaste={handlePaste}
-            onClick={handleEditorClick}
-            className="master-file-editor master-file-content outline-none min-h-[60vh] max-w-3xl mx-auto"
-            data-placeholder="Start writing your guide..."
-            style={{ color: 'var(--foreground)', fontSize: '15px', lineHeight: '1.75' }}
-          />
+        {/* ---- Editor + optional share sidebar ----------------------------- */}
+        <div className="flex-1 flex min-h-0">
+
+          {/* Editor body */}
+          <div className="flex-1 overflow-y-auto px-12 py-8">
+            <div
+              ref={editorRef}
+              contentEditable={loaded}
+              suppressContentEditableWarning
+              onInput={() => scheduleAutoSave()}
+              onPaste={handlePaste}
+              onClick={handleEditorClick}
+              className="master-file-editor master-file-content outline-none min-h-[60vh] max-w-3xl mx-auto"
+              data-placeholder="Start writing your guide..."
+              style={{ color: 'var(--foreground)', fontSize: '15px', lineHeight: '1.75' }}
+            />
+          </div>
+
+          {/* Share sidebar */}
+          {showSharePanel && (
+            <div className="w-64 flex-shrink-0 border-l flex flex-col"
+              style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
+
+              <div className="px-4 py-3 border-b flex-shrink-0" style={{ borderColor: 'var(--border)' }}>
+                <p className="font-semibold text-sm" style={{ color: 'var(--foreground)' }}>Share with students</p>
+                <label className="flex items-center gap-1.5 text-xs mt-1.5 cursor-pointer" style={{ color: 'var(--text-muted)' }}>
+                  <input type="checkbox" checked={notifyOnShare} onChange={e => setNotifyOnShare(e.target.checked)} />
+                  Notify when sharing
+                </label>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-3 space-y-2">
+                {loadingShare && (
+                  <div className="flex items-center justify-center py-8">
+                    <div className="w-5 h-5 border-2 rounded-full animate-spin"
+                      style={{ borderColor: 'var(--border)', borderTopColor: 'var(--accent)' }} />
+                  </div>
+                )}
+                {!loadingShare && shareStudents.length === 0 && (
+                  <p className="text-xs text-center py-6" style={{ color: 'var(--text-muted)' }}>No students enrolled yet.</p>
+                )}
+                {!loadingShare && shareStudents.map(s => {
+                  const isShared  = sharedIds.has(s.id)
+                  const toggling  = togglingId === s.id
+                  return (
+                    <div key={s.id} className="flex items-center justify-between gap-2 rounded-xl p-2.5"
+                      style={{ background: isShared ? 'var(--accent-light)' : 'var(--background)', border: '1px solid var(--border)' }}>
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium truncate" style={{ color: 'var(--foreground)' }}>
+                          {s.full_name || s.email}
+                        </p>
+                        {s.full_name && (
+                          <p className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>{s.email}</p>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => toggleShare(s)}
+                        disabled={toggling}
+                        className="flex-shrink-0 text-xs px-2.5 py-1 rounded-lg font-medium disabled:opacity-50 transition-colors"
+                        style={isShared ? {
+                          background: '#f0fdf4', color: '#16a34a', border: '1px solid #bbf7d0',
+                        } : {
+                          background: 'var(--accent)', color: '#fff',
+                        }}
+                      >
+                        {toggling ? '...' : isShared ? 'Shared' : 'Share'}
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

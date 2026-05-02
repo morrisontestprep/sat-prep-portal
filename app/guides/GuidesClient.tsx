@@ -146,6 +146,9 @@ export default function GuidesClient({ initialGuides }: { initialGuides: Guide[]
                 <h3 className="font-semibold leading-snug" style={{ color: 'var(--foreground)' }}>
                   {g.title || 'Untitled Guide'}
                 </h3>
+                {g.domain && (
+                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{g.domain}</p>
+                )}
 
                 {/* Footer */}
                 <p className="text-xs mt-auto" style={{ color: 'var(--text-muted)' }}>
