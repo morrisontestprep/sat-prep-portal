@@ -36,11 +36,11 @@ export default async function StudentsPage() {
   if (guidesError) console.error('guides fetch error:', guidesError.message)
 
   // Fetch all guide shares (table may not exist yet if migration hasn't run)
-  const { data: allShares } = await supabase
-    .from('guide_shares')
-    .select('guide_id, student_id')
-    .then(r => r)
-    .catch(() => ({ data: null }))
+  let allShares: { guide_id: string; student_id: string }[] | null = null
+  try {
+    const { data } = await supabase.from('guide_shares').select('guide_id, student_id')
+    allShares = data
+  } catch { /* table not yet created */ }
 
   // Group assignments by student
   type Assignment = {
