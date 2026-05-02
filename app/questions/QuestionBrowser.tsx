@@ -94,6 +94,7 @@ export default function QuestionBrowser({
   const [excludedQids, setExcludedQids] = useState<string[]>([])
   const [loadingExcluded, setLoadingExcluded] = useState(false)
   const [notAssignedOpen, setNotAssignedOpen] = useState(true)
+  const [skillOpen, setSkillOpen] = useState(false)
 
   // ── UI state ───────────────────────────────────────────────────────────────
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -669,25 +670,43 @@ export default function QuestionBrowser({
         {/* Skill */}
         {allSkills.length > 0 && (
           <div className="mb-5">
-            <p className="text-xs font-medium mb-2" style={{ color: 'var(--foreground)' }}>Skill</p>
-            <div className="flex flex-col gap-1">
-              <button onClick={() => setFilter('skill', '')}
-                className="text-left px-3 py-1.5 rounded-lg text-sm"
-                style={{ background: filters.skill === '' ? 'var(--accent-light)' : 'transparent', color: filters.skill === '' ? 'var(--accent)' : 'var(--text-muted)', fontWeight: filters.skill === '' ? '500' : '400' }}>
-                All
-              </button>
-              {allSkills.map(s => (
-                <button key={s} onClick={() => setFilter('skill', s)}
-                  className="text-left px-3 py-1.5 rounded-lg text-sm leading-tight"
-                  style={{
-                    background: filters.skill === s ? 'var(--accent-light)' : 'transparent',
-                    color: filters.skill === s ? 'var(--accent)' : 'var(--text-muted)',
-                    fontWeight: filters.skill === s ? '500' : '400',
-                  }}>
-                  {s}
+            <button
+              onClick={() => setSkillOpen(o => !o)}
+              className="w-full flex items-center justify-between text-xs font-medium mb-2"
+              style={{ color: 'var(--foreground)' }}
+            >
+              <span>
+                Skill
+                {filters.skill && (
+                  <span className="ml-1 px-1.5 py-0.5 rounded-full text-white text-xs"
+                    style={{ background: 'var(--accent)', fontSize: 10 }}>1</span>
+                )}
+              </span>
+              <svg className={`w-3 h-3 transition-transform ${skillOpen ? 'rotate-180' : ''}`}
+                fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            {skillOpen && (
+              <div className="flex flex-col gap-1">
+                <button onClick={() => setFilter('skill', '')}
+                  className="text-left px-3 py-1.5 rounded-lg text-sm"
+                  style={{ background: filters.skill === '' ? 'var(--accent-light)' : 'transparent', color: filters.skill === '' ? 'var(--accent)' : 'var(--text-muted)', fontWeight: filters.skill === '' ? '500' : '400' }}>
+                  All
                 </button>
-              ))}
-            </div>
+                {allSkills.map(s => (
+                  <button key={s} onClick={() => setFilter('skill', s)}
+                    className="text-left px-3 py-1.5 rounded-lg text-sm leading-tight"
+                    style={{
+                      background: filters.skill === s ? 'var(--accent-light)' : 'transparent',
+                      color: filters.skill === s ? 'var(--accent)' : 'var(--text-muted)',
+                      fontWeight: filters.skill === s ? '500' : '400',
+                    }}>
+                    {s}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
