@@ -82,12 +82,14 @@ function StudentCard({
     const isShared = sharedIds.has(guide.id)
 
     if (isShared) {
-      await supabase.from('guide_shares').delete()
+      const { error } = await supabase.from('guide_shares').delete()
         .eq('guide_id', guide.id).eq('student_id', student.id)
+      if (error) { alert(`Failed to unshare: ${error.message}`); setTogglingId(null); return }
       setSharedIds(prev => { const s = new Set(prev); s.delete(guide.id); return s })
     } else {
-      await supabase.from('guide_shares')
+      const { error } = await supabase.from('guide_shares')
         .upsert({ guide_id: guide.id, student_id: student.id }, { onConflict: 'guide_id,student_id', ignoreDuplicates: true })
+      if (error) { alert(`Failed to share: ${error.message}`); setTogglingId(null); return }
       setSharedIds(prev => new Set([...prev, guide.id]))
       if (notifyOnShare && student.email) {
         fetch('/api/notify', {
