@@ -29,15 +29,18 @@ export default async function StudentsPage() {
     .order('assigned_at', { ascending: false })
 
   // Fetch all guides (for the per-student guide panel)
-  const { data: allGuides } = await supabase
+  const { data: allGuides, error: guidesError } = await supabase
     .from('instructional_guides')
-    .select('id, title, subject, domain')
+    .select('*')
     .order('updated_at', { ascending: false })
+  if (guidesError) console.error('guides fetch error:', guidesError.message)
 
-  // Fetch all guide shares
+  // Fetch all guide shares (table may not exist yet if migration hasn't run)
   const { data: allShares } = await supabase
     .from('guide_shares')
     .select('guide_id, student_id')
+    .then(r => r)
+    .catch(() => ({ data: null }))
 
   // Group assignments by student
   type Assignment = {
