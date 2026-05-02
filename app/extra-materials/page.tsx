@@ -29,12 +29,10 @@ export default async function ExtraMaterialsPage() {
 
   if (sharesError) console.error('[extra-materials] fetch error:', sharesError.message)
 
-  const guides: SharedGuide[] = (shares ?? [])
-    .map((s: { instructional_guides: unknown }) => s.instructional_guides)
-    .filter(Boolean)
-    .sort((a: SharedGuide, b: SharedGuide) =>
-      new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-    ) as SharedGuide[]
+  const guides: SharedGuide[] = ((shares ?? []) as { instructional_guides: SharedGuide | null }[])
+    .map(s => s.instructional_guides)
+    .filter((g): g is SharedGuide => g !== null)
+    .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--background)' }}>
