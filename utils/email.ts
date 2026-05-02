@@ -143,6 +143,36 @@ export async function sendStudentCommentNotification(
   })
 }
 
+// ── Notify all students: new instructional guide published ───────────────────
+export async function sendNewGuideNotification(
+  guideTitle: string,
+  students: { email: string; name: string }[],
+) {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://sat-prep-portal.vercel.app'
+  await Promise.allSettled(
+    students.map(s =>
+      transporter.sendMail({
+        from: `"Morrison Test Prep" <${TEACHER_EMAIL}>`,
+        to: s.email,
+        subject: `New guide available: "${guideTitle}"`,
+        html: `
+          <div style="font-family:sans-serif;max-width:480px;margin:0 auto">
+            <h2 style="color:#4f46e5">New Instructional Guide</h2>
+            <p>Hi ${s.name || 'there'},</p>
+            <p>Your tutor just published a new instructional guide: <strong>${guideTitle}</strong>.</p>
+            <p>You can find it in the <strong>Extra Materials</strong> section of your portal.</p>
+            <a href="${appUrl}/my-assignments"
+              style="display:inline-block;background:#4f46e5;color:white;padding:10px 20px;border-radius:8px;text-decoration:none;font-size:14px;margin-top:8px">
+              Open Portal
+            </a>
+            <p style="color:#9ca3af;font-size:12px;margin-top:24px">Morrison Test Prep &middot; <a href="${appUrl}" style="color:#9ca3af">${appUrl}</a></p>
+          </div>
+        `,
+      })
+    )
+  )
+}
+
 // ── Notify student: worksheet assigned ───────────────────────────────────────
 export async function sendWorksheetAssignedNotification(
   studentEmail: string,

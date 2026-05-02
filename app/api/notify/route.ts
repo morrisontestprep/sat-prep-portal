@@ -6,6 +6,7 @@ import {
   sendWorksheetAssignedNotification,
   sendNotesUpdatedNotification,
   sendStudentCommentNotification,
+  sendNewGuideNotification,
 } from '@/utils/email'
 
 export async function POST(request: Request) {
@@ -78,6 +79,23 @@ export async function POST(request: Request) {
     if (type === 'student_comment') {
       const { studentName, commentText, quotedText } = body
       await sendStudentCommentNotification(studentName, commentText, quotedText ?? null)
+      return NextResponse.json({ ok: true })
+    }
+
+    if (type === 'new_guide') {
+      const { guideTitle } = body
+      // Fetch all student profiles
+      const { data: students } = await supabase
+        .from('profiles')
+        .select('full_name, email')
+        .eq('role', 'student')
+      const list = (students ?? [])
+        .filter((s: { email: string | null }) => s.email)
+        .map((s: { full_name: string | null; email: string }) => ({
+          email: s.email,
+          name: s.full_name || s.email,
+        }))
+      await sendNewGuideNotification(guideTitle, list)
       return NextResponse.json({ ok: true })
     }
 
