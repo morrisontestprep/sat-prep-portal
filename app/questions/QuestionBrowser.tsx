@@ -23,6 +23,7 @@ type Student = { id: string; full_name: string | null; email: string | null }
 type Filters = {
   subject: string
   domain: string
+  skill: string
   difficulty: string
   tags: number[]   // tag IDs — AND logic
 }
@@ -116,8 +117,11 @@ export default function QuestionBrowser({
   const [frMode, setFrMode] = useState<'replace' | 'delete'>('replace')
 
   const [filters, setFilters] = useState<Filters>({
-    subject: '', domain: '', difficulty: '', tags: [],
+    subject: '', domain: '', skill: '', difficulty: '', tags: [],
   })
+
+  // All skills available for the current subject + domain selection
+  const [allSkills, setAllSkills] = useState<string[]>([])
 
   // ── AI Worksheet Builder state ─────────────────────────────────────────────
   const [aiPrompt, setAiPrompt] = useState('')
@@ -159,6 +163,18 @@ export default function QuestionBrowser({
     supabase.from('profiles').select('id, full_name, email').eq('role', 'student').order('full_name')
       .then(({ data }) => setAllStudents(data ?? []))
   }, [supabase])
+
+  // ── Fetch distinct skills for current subject + domain ────────────────────
+  useEffect(() => {
+    ;(async () => {
+      let q = supabase.from('questions').select('skill').not('skill', 'is', null).neq('skill', '')
+      if (filters.subject) q = q.eq('subject', filters.subject)
+      if (filters.domain)  q = q.eq('domain',  filters.domain)
+      const { data } = await q
+      const unique = [...new Set((data ?? []).map((r: { skill: string }) => r.skill).filter(Boolean))].sort()
+      setAllSkills(unique)
+    })()
+  }, [filters.subject, filters.domain, supabase])
 
   // ── Compute excluded question IDs when "not assigned to" filter changes ────
   useEffect(() => {
@@ -203,6 +219,7 @@ export default function QuestionBrowser({
 
     if (f.subject)    query = query.eq('subject', f.subject)
     if (f.domain)     query = query.eq('domain', f.domain)
+    if (f.skill)      query = query.eq('skill', f.skill)
     if (f.difficulty) {
       if (f.difficulty === 'Unrated') {
         query = query.or('difficulty.is.null,difficulty.eq.')
@@ -418,7 +435,8 @@ export default function QuestionBrowser({
     setPage(0)
     setFilters(prev => {
       const next = { ...prev, [key]: value }
-      if (key === 'subject') next.domain = ''
+      if (key === 'subject') { next.domain = ''; next.skill = '' }
+      if (key === 'domain')  { next.skill = '' }
       return next
     })
   }
@@ -647,6 +665,31 @@ export default function QuestionBrowser({
             ))}
           </div>
         </div>
+
+        {/* Skill */}
+        {allSkills.length > 0 && (
+          <div className="mb-5">
+            <p className="text-xs font-medium mb-2" style={{ color: 'var(--foreground)' }}>Skill</p>
+            <div className="flex flex-col gap-1">
+              <button onClick={() => setFilter('skill', '')}
+                className="text-left px-3 py-1.5 rounded-lg text-sm"
+                style={{ background: filters.skill === '' ? 'var(--accent-light)' : 'transparent', color: filters.skill === '' ? 'var(--accent)' : 'var(--text-muted)', fontWeight: filters.skill === '' ? '500' : '400' }}>
+                All
+              </button>
+              {allSkills.map(s => (
+                <button key={s} onClick={() => setFilter('skill', s)}
+                  className="text-left px-3 py-1.5 rounded-lg text-sm leading-tight"
+                  style={{
+                    background: filters.skill === s ? 'var(--accent-light)' : 'transparent',
+                    color: filters.skill === s ? 'var(--accent)' : 'var(--text-muted)',
+                    fontWeight: filters.skill === s ? '500' : '400',
+                  }}>
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Difficulty */}
         <div className="mb-5">
