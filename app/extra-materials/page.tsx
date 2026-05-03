@@ -17,21 +17,28 @@ export default async function ExtraMaterialsPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  // Fetch shared guides in one joined query
-  const { data: shares, error: sharesError } = await supabase
+  // Step 1: get guide IDs shared with this student
+  const { data: shareRows, error: sharesError } = await supabase
     .from('guide_shares')
-    .select(`
-      instructional_guides (
-        id, title, subject, domain, content, updated_at
-      )
-    `)
+    .select('guide_id')
     .eq('student_id', user.id)
 
-  if (sharesError) console.error('[extra-materials] fetch error:', sharesError.message)
+  if (sharesError) console.error('[extra-materials] shares fetch error:', sharesError.message)
 
-  const guides: SharedGuide[] = ((shares ?? []) as unknown as { instructional_guides: SharedGuide[] }[])
-    .flatMap(s => s.instructional_guides ?? [])
-    .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+  const guideIds = (shareRows ?? []).map(s => s.guide_id as string)
+
+  // Step 2: fetch the actual guides
+  let guides: SharedGuide[] = []
+  if (guideIds.length > 0) {
+    const { data: guideRows, error: guidesError } = await supabase
+      .from('instructional_guides')
+      .select('id, title, subject, domain, content, updated_at')
+      .in('id', guideIds)
+    if (guidesError) console.error('[extra-materials] guides fetch error:', guidesError.message)
+    guides = (guideRows ?? []).sort(
+      (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+    )
+  }
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--background)' }}>
