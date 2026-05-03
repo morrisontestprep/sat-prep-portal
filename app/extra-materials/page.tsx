@@ -43,6 +43,10 @@ export default async function ExtraMaterialsPage() {
   return (
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--background)' }}>
       <Nav userEmail={user.email} />
+      {/* TEMP DEBUG — remove after fixing */}
+      <pre style={{ background: '#111', color: '#0f0', fontSize: 11, padding: 12, whiteSpace: 'pre-wrap' }}>
+        {JSON.stringify({ userId: user.id, shareRows, sharesError, guideIds, guidesCount: guides.length }, null, 2)}
+      </pre>
       <main className="flex-1 flex flex-col">
         <ExtraMaterialsClient guides={guides} />
       </main>
