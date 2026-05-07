@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Image from 'next/image'
 import DesmosCalculator from '@/components/DesmosCalculator'
+import FormulasButton from '@/components/FormulasButton'
 import { isFreeResponse } from '@/utils/grading'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -993,8 +994,9 @@ function GameScreen({
         </div>
       </div>
 
-      {/* Desmos calculator */}
+      {/* Floating tools: calculator + formulas (math questions only) */}
       <DesmosCalculator />
+      {questions[currentIdx]?.subject === 'math' && <FormulasButton hasCalculator />}
     </div>
   )
 }

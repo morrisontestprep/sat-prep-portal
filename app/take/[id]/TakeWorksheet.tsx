@@ -6,6 +6,7 @@ import { createClient } from '@/utils/supabase/client'
 import { isFreeResponse, checkFreeResponse } from '@/utils/grading'
 import type { WorksheetItem, ExistingAnswer } from './page'
 import DesmosCalculator from '@/components/DesmosCalculator'
+import FormulasButton from '@/components/FormulasButton'
 import ExplanationViewer from '@/components/ExplanationViewer'
 
 type Props = {
@@ -639,6 +640,7 @@ export default function TakeWorksheet({
         </div>
 
         <DesmosCalculator />
+        {currentQ?.subject === 'math' && <FormulasButton hasCalculator />}
       </main>
     )
   }
@@ -850,6 +852,7 @@ export default function TakeWorksheet({
       </div>
 
       <DesmosCalculator />
+      {currentQ?.subject === 'math' && <FormulasButton hasCalculator />}
     </main>
   )
 }

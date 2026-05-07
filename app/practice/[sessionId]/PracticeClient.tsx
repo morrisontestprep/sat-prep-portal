@@ -4,6 +4,8 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { isFreeResponse } from '@/utils/grading'
 import type { PracticeQuestion, PracticeSession } from './page'
+import DesmosCalculator from '@/components/DesmosCalculator'
+import FormulasButton from '@/components/FormulasButton'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -70,6 +72,7 @@ export default function PracticeClient({ session, questions, existingAnswers }: 
     return first === -1 ? questions.length - 1 : first
   })
   const [showAnswer,    setShowAnswer]    = useState(false)
+  const [pendingChoice, setPendingChoice] = useState<string | null>(null) // selected but not yet submitted
   const [freeText,      setFreeText]      = useState('')
   const [completing,    setCompleting]    = useState(false)
   const [phase,         setPhase]         = useState<'practice' | 'done'>(
@@ -118,6 +121,7 @@ export default function PracticeClient({ session, questions, existingAnswers }: 
 
   const handleNext = useCallback(() => {
     setShowAnswer(false)
+    setPendingChoice(null)
     setFreeText('')
     if (currentIndex < questions.length - 1) {
       setCurrentIndex(i => i + 1)
@@ -365,39 +369,50 @@ export default function PracticeClient({ session, questions, existingAnswers }: 
               )}
             </div>
           ) : (
-            CHOICES.map(choice => {
-              const isSelected = currentAns?.selected === choice
-              const isRight    = choice === currentQ.correct_answer
-              let bg = 'transparent', border = 'var(--border)', color = 'var(--foreground)'
+            <>
+              {CHOICES.map(choice => {
+                const isSelected    = alreadyAnswered ? currentAns?.selected === choice : pendingChoice === choice
+                const isRight       = choice === currentQ.correct_answer
+                let bg = 'transparent', border = 'var(--border)', color = 'var(--foreground)'
 
-              if (alreadyAnswered) {
-                if (isRight)     { bg = '#f0fdf4'; border = '#16a34a'; color = '#16a34a' }
-                else if (isSelected && !isRight) { bg = '#fef2f2'; border = '#dc2626'; color = '#dc2626' }
-              } else {
-                // Hover state handled by Tailwind
-              }
+                if (alreadyAnswered) {
+                  if (isRight)                       { bg = '#f0fdf4'; border = '#16a34a'; color = '#16a34a' }
+                  else if (isSelected && !isRight)   { bg = '#fef2f2'; border = '#dc2626'; color = '#dc2626' }
+                } else if (pendingChoice === choice) {
+                  bg = '#eff6ff'; border = '#3b82f6'; color = '#1d4ed8'
+                }
 
-              return (
+                return (
+                  <button
+                    key={choice}
+                    onClick={() => !alreadyAnswered && setPendingChoice(choice)}
+                    disabled={alreadyAnswered}
+                    className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border text-sm text-left font-medium transition-all disabled:cursor-default"
+                    style={{ background: bg, borderColor: border, color }}>
+                    <span
+                      className="w-7 h-7 rounded-full border-2 flex items-center justify-center font-bold text-xs flex-shrink-0"
+                      style={{ borderColor: border, color }}>
+                      {choice}
+                    </span>
+                    {alreadyAnswered && isRight && (
+                      <span className="text-xs">✓ Correct</span>
+                    )}
+                    {alreadyAnswered && isSelected && !isRight && (
+                      <span className="text-xs">✗ Your answer</span>
+                    )}
+                  </button>
+                )
+              })}
+              {/* Submit button — appears once a choice is selected */}
+              {!alreadyAnswered && pendingChoice && (
                 <button
-                  key={choice}
-                  onClick={() => handleAnswer(choice)}
-                  disabled={alreadyAnswered}
-                  className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border text-sm text-left font-medium transition-all disabled:cursor-default"
-                  style={{ background: bg, borderColor: border, color }}>
-                  <span
-                    className="w-7 h-7 rounded-full border-2 flex items-center justify-center font-bold text-xs flex-shrink-0"
-                    style={{ borderColor: border, color }}>
-                    {choice}
-                  </span>
-                  {alreadyAnswered && isRight && (
-                    <span className="text-xs">✓ Correct</span>
-                  )}
-                  {alreadyAnswered && isSelected && !isRight && (
-                    <span className="text-xs">✗ Your answer</span>
-                  )}
+                  onClick={() => handleAnswer(pendingChoice)}
+                  className="mt-1 w-full py-3 rounded-xl font-semibold text-sm text-white transition-opacity"
+                  style={{ background: 'var(--accent)' }}>
+                  Submit Answer
                 </button>
-              )
-            })
+              )}
+            </>
           )}
         </div>
 
@@ -442,7 +457,7 @@ export default function PracticeClient({ session, questions, existingAnswers }: 
           return (
             <button
               key={q.id}
-              onClick={() => { setCurrentIndex(i); setShowAnswer(false); setFreeText('') }}
+              onClick={() => { setCurrentIndex(i); setShowAnswer(false); setFreeText(''); setPendingChoice(null) }}
               className="w-6 h-6 rounded-full text-xs font-bold transition-all border"
               style={{
                 background: i === currentIndex
@@ -458,6 +473,14 @@ export default function PracticeClient({ session, questions, existingAnswers }: 
           )
         })}
       </div>
+
+      {/* Floating tools: calculator + formulas (math questions only) */}
+      {currentQ.subject === 'math' && (
+        <>
+          <DesmosCalculator />
+          <FormulasButton hasCalculator />
+        </>
+      )}
     </div>
   )
 }
