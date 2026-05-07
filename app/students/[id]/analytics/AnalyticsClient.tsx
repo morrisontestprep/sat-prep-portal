@@ -3,7 +3,8 @@
 import { useState, useMemo, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
+  LineChart, Line, BarChart, Bar, Cell,
+  XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine,
 } from 'recharts'
 import type { UnifiedAnswer, AnswerSource } from '@/lib/analyticsData'
@@ -58,284 +59,436 @@ function applyFilters(answers: UnifiedAnswer[], f: FilterState): UnifiedAnswer[]
   return pool
 }
 
-const DIFF_ORDER = ['Easy', 'Medium', 'Hard']
-
-// ─── Trend chart ──────────────────────────────────────────────────────────────
-
-type TrendPoint = { label: string; pct: number; correct: number; total: number }
-
-function TrendChart({ answers }: { answers: UnifiedAnswer[] }) {
-  const sorted = [...answers].sort(
-    (a, b) => new Date(a.answered_at).getTime() - new Date(b.answered_at).getTime()
-  )
-
-  const BATCH = 5
-  const points: TrendPoint[] = []
-  for (let i = 0; i + BATCH <= sorted.length; i += BATCH) {
-    const chunk   = sorted.slice(i, i + BATCH)
-    const correct = chunk.filter(a => a.is_correct === true).length
-    points.push({
-      label:   `Q${i + 1}–${i + BATCH}`,
-      pct:     Math.round((correct / BATCH) * 100),
-      correct,
-      total:   BATCH,
-    })
-  }
-  // Include a partial last batch only if at least 3 answers
-  const remainder = sorted.length % BATCH
-  if (remainder >= 3) {
-    const chunk   = sorted.slice(sorted.length - remainder)
-    const correct = chunk.filter(a => a.is_correct === true).length
-    points.push({
-      label:   `Q${sorted.length - remainder + 1}–${sorted.length}`,
-      pct:     Math.round((correct / chunk.length) * 100),
-      correct,
-      total:   chunk.length,
-    })
-  }
-
-  if (points.length < 2) {
-    return (
-      <div className="flex items-center justify-center h-32 rounded-xl border-2 border-dashed text-sm"
-        style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
-        Need at least 10 questions to show trend (have {sorted.length})
-      </div>
-    )
-  }
-
-  const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?: { value: number; payload: TrendPoint }[]; label?: string }) => {
-    if (!active || !payload?.length) return null
-    const d = payload[0].payload
-    return (
-      <div className="rounded-xl border px-3 py-2 text-sm shadow-lg"
-        style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
-        <p className="font-semibold" style={{ color: 'var(--foreground)' }}>{label}</p>
-        <p style={{ color: scoreColor(d.pct) }}>{d.pct}% correct</p>
-        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{d.correct}/{d.total} right</p>
-      </div>
-    )
-  }
-
-  return (
-    <ResponsiveContainer width="100%" height={180}>
-      <LineChart data={points} margin={{ top: 8, right: 16, bottom: 0, left: -16 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-        <XAxis
-          dataKey="label"
-          tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
-          tickLine={false}
-          interval="preserveStartEnd"
-        />
-        <YAxis
-          domain={[0, 100]}
-          tickFormatter={v => `${v}%`}
-          tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
-          tickLine={false}
-          axisLine={false}
-        />
-        <Tooltip content={<CustomTooltip />} />
-        <ReferenceLine y={70} strokeDasharray="4 4" stroke="#d97706" strokeWidth={1.5} />
-        <Line
-          type="monotone"
-          dataKey="pct"
-          stroke="var(--accent)"
-          strokeWidth={2.5}
-          dot={{ r: 4, fill: 'var(--accent)', strokeWidth: 0 }}
-          activeDot={{ r: 6 }}
-        />
-      </LineChart>
-    </ResponsiveContainer>
-  )
-}
-
-// ─── Strengths & Weaknesses panel ─────────────────────────────────────────────
-
-type GroupStat = { name: string; pct: number; correct: number; total: number; difficultyAdj: number }
-
-// Difficulty-adjusted score: hard questions are graded on a curve so that
-// 65% on Hard ≈ 80% on Easy when classifying strength vs. weakness.
-const DIFF_BONUS: Record<string, number> = { Easy: 0, Medium: 8, Hard: 16, Unrated: 4 }
-
+const DIFF_ORDER   = ['Easy', 'Medium', 'Hard']
+const DIFF_COLORS: Record<string, string> = { Easy: '#16a34a', Medium: '#d97706', Hard: '#dc2626', Unrated: '#6b7280' }
 const RECENCY_WINDOW = 30
 
-function groupAnswers(answers: UnifiedAnswer[], f: FilterState): GroupStat[] {
-  // Decide grouping dimension based on current filter depth
-  const getKey = (a: UnifiedAnswer) => {
-    if (f.skill)   return a.difficulty || 'Unrated'
-    if (f.domain)  return a.skill      || 'Unknown'
-    if (f.subject) return a.domain     || 'Unknown'
-    return a.domain || 'Unknown'
+function barFill(p: number) {
+  return p >= 80 ? '#16a34a' : p >= 55 ? '#d97706' : '#dc2626'
+}
+
+/** Deduplicate by question_id (keep latest), sort chronologically, take last N */
+function dedupRecent(pool: UnifiedAnswer[], n = RECENCY_WINDOW): UnifiedAnswer[] {
+  const latest = new Map<string, UnifiedAnswer>()
+  for (const a of pool) latest.set(a.question_id, a)
+  return [...latest.values()]
+    .sort((a, b) => new Date(a.answered_at).getTime() - new Date(b.answered_at).getTime())
+    .slice(-n)
+}
+
+// ─── Panel 1: Performance by Difficulty (bar chart per subject) ───────────────
+
+type BarDatum = { difficulty: string; pct: number | null; correct: number; total: number; fill: string }
+
+function DifficultyBarChart({ answers, subject }: { answers: UnifiedAnswer[]; subject: string }) {
+  const [domain, setDomain] = useState<string | null>(null)
+  const [skill,  setSkill]  = useState<string | null>(null)
+
+  const subjectLabel = subject === 'math' ? 'Math' : 'English'
+
+  const subjectAnswers = useMemo(
+    () => answers.filter(a => a.subject === subject),
+    [answers, subject]
+  )
+  const domains = useMemo(
+    () => [...new Set(subjectAnswers.map(a => a.domain).filter((d): d is string => !!d))].sort(),
+    [subjectAnswers]
+  )
+  const skills = useMemo(
+    () => domain
+      ? [...new Set(subjectAnswers.filter(a => a.domain === domain).map(a => a.skill).filter((s): s is string => !!s))].sort()
+      : [],
+    [subjectAnswers, domain]
+  )
+  const scoped = useMemo(() => {
+    let pool = subjectAnswers
+    if (domain) pool = pool.filter(a => a.domain === domain)
+    if (skill)  pool = pool.filter(a => a.skill  === skill)
+    return pool
+  }, [subjectAnswers, domain, skill])
+
+  const barData: BarDatum[] = useMemo(() =>
+    DIFF_ORDER.map(diff => {
+      const recent = dedupRecent(scoped.filter(a => a.difficulty === diff))
+      if (recent.length === 0) return { difficulty: diff, pct: null, correct: 0, total: 0, fill: '#e5e7eb' }
+      const correct = recent.filter(a => a.is_correct === true).length
+      const p = Math.round(correct / recent.length * 100)
+      return { difficulty: diff, pct: p, correct, total: recent.length, fill: barFill(p) }
+    }),
+    [scoped]
+  )
+
+  const hasData = barData.some(b => b.total > 0)
+
+  // Custom X-axis tick: difficulty name + sample size below
+  function CustomTick({ x = 0, y = 0, payload }: { x?: number; y?: number; payload?: { value: string } }) {
+    const d = barData.find(b => b.difficulty === payload?.value)
+    return (
+      <g transform={`translate(${x},${y})`}>
+        <text x={0} y={12} textAnchor="middle" fontSize={11} fill="var(--text-muted)">{payload?.value}</text>
+        {d && d.total > 0 && (
+          <text x={0} y={26} textAnchor="middle" fontSize={10} fill="var(--text-muted)">n={d.total}</text>
+        )}
+      </g>
+    )
   }
 
-  // Group all answers by key, sorted chronologically (answers already sorted by answered_at)
-  const buckets = new Map<string, UnifiedAnswer[]>()
+  // Label above each bar showing percentage
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function BarLabel({ x = 0, y = 0, width = 0, value, index = 0 }: any) {
+    if (value == null) return null
+    const d = barData[index]
+    if (!d || d.total === 0) return null
+    return (
+      <text x={x + width / 2} y={y - 6} textAnchor="middle" fontSize={12} fontWeight={700} fill={d.fill}>
+        {value}%
+      </text>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-2.5">
+      {/* Header + domain pills */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <p className="text-sm font-bold flex-shrink-0" style={{ color: 'var(--foreground)' }}>{subjectLabel}</p>
+        {domains.map(d => (
+          <button key={d}
+            onClick={() => { setDomain(domain === d ? null : d); setSkill(null) }}
+            className="text-xs px-2.5 py-1 rounded-full border transition-all"
+            style={{
+              borderColor: domain === d ? 'var(--accent)' : 'var(--border)',
+              background:  domain === d ? 'var(--accent-light)' : 'transparent',
+              color:       domain === d ? 'var(--accent)' : 'var(--text-muted)',
+            }}>
+            {d}
+          </button>
+        ))}
+      </div>
+      {/* Skill pills */}
+      {skills.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 pl-2 border-l-2" style={{ borderColor: 'var(--accent-light)' }}>
+          {skills.map(sk => (
+            <button key={sk}
+              onClick={() => setSkill(skill === sk ? null : sk)}
+              className="text-xs px-2.5 py-1 rounded-full border transition-all"
+              style={{
+                borderColor: skill === sk ? 'var(--accent)' : 'var(--border)',
+                background:  skill === sk ? 'var(--accent-light)' : 'transparent',
+                color:       skill === sk ? 'var(--accent)' : 'var(--text-muted)',
+              }}>
+              {sk}
+            </button>
+          ))}
+        </div>
+      )}
+      {/* Chart */}
+      {!hasData ? (
+        <div className="h-36 flex items-center justify-center rounded-xl border-2 border-dashed text-xs"
+          style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
+          No {subjectLabel} data yet
+        </div>
+      ) : (
+        <>
+          <ResponsiveContainer width="100%" height={160}>
+            <BarChart data={barData} margin={{ top: 24, right: 4, bottom: 28, left: -20 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+              <XAxis dataKey="difficulty" tick={<CustomTick />} tickLine={false} axisLine={false} interval={0} />
+              <YAxis domain={[0, 100]} tickFormatter={v => `${v}%`} tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} />
+              <Tooltip
+                content={({ active, payload }) => {
+                  if (!active || !payload?.length) return null
+                  const d = payload[0].payload as BarDatum
+                  if (d.total === 0) return null
+                  return (
+                    <div className="rounded-xl border px-3 py-2 text-xs shadow-lg"
+                      style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
+                      <p className="font-semibold" style={{ color: 'var(--foreground)' }}>{d.difficulty}</p>
+                      <p style={{ color: d.fill }}>{d.pct}% correct</p>
+                      <p style={{ color: 'var(--text-muted)' }}>{d.correct} / {d.total} questions (last {RECENCY_WINDOW})</p>
+                    </div>
+                  )
+                }}
+              />
+              {/* Green dashed line at 80% mastery */}
+              <ReferenceLine y={80} strokeDasharray="4 4" stroke="#16a34a" strokeWidth={1.5} opacity={0.5} />
+              <Bar dataKey="pct" radius={[4, 4, 0, 0]} label={<BarLabel />}>
+                {barData.map((entry, i) => (
+                  <Cell key={i} fill={entry.fill} fillOpacity={entry.total === 0 ? 0.2 : 1} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+            Dashed line = 80% mastery · bars use last {RECENCY_WINDOW} unique questions
+          </p>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ─── Panel 2: Readiness Signals ───────────────────────────────────────────────
+
+type ReadinessSignal = {
+  domain:  string
+  signal:  'mastered' | 'level-up-hard' | 'level-up-medium' | 'foundation-gap'
+  pct:     number
+  count:   number
+  atDiff:  string
+}
+
+const SIGNAL_CFG = {
+  'mastered':        { label: 'Mastered Hard',          icon: '⭐', color: '#16a34a', bg: '#f0fdf4' },
+  'level-up-hard':   { label: 'Try Hard questions',     icon: '🚀', color: '#7c3aed', bg: '#f5f3ff' },
+  'level-up-medium': { label: 'Try Medium questions',   icon: '📈', color: '#2563eb', bg: '#eff6ff' },
+  'foundation-gap':  { label: 'Foundation gap',         icon: '⚠️', color: '#dc2626', bg: '#fef2f2' },
+}
+
+function buildReadinessSignals(answers: UnifiedAnswer[]): ReadinessSignal[] {
+  const domainGroups = new Map<string, UnifiedAnswer[]>()
   for (const a of answers) {
-    const key = getKey(a)
-    if (!buckets.has(key)) buckets.set(key, [])
-    buckets.get(key)!.push(a)
+    const d = a.domain || 'Unknown'
+    if (!domainGroups.has(d)) domainGroups.set(d, [])
+    domainGroups.get(d)!.push(a)
   }
 
-  return Array.from(buckets.entries())
-    .map(([name, all]) => {
-      // Take only the most recent RECENCY_WINDOW answers for this group
-      const recent = all.slice(-RECENCY_WINDOW)
-      if (recent.length < 5) return null
+  const signals: ReadinessSignal[] = []
+  const MIN = 10
 
-      let correct = 0, diffSum = 0
-      for (const a of recent) {
-        if (a.is_correct === true) correct++
-        diffSum += DIFF_BONUS[a.difficulty || 'Unrated'] ?? 4
-      }
+  for (const [domain, pool] of domainGroups.entries()) {
+    const stats: Partial<Record<string, { pct: number; count: number }>> = {}
+    for (const diff of DIFF_ORDER) {
+      const recent = dedupRecent(pool.filter(a => a.difficulty === diff))
+      if (recent.length === 0) continue
+      const correct = recent.filter(a => a.is_correct === true).length
+      stats[diff] = { pct: Math.round(correct / recent.length * 100), count: recent.length }
+    }
 
-      const rawPct = Math.round(correct / recent.length * 100)
-      const avgBonus = diffSum / recent.length
-      return { name, pct: rawPct, correct, total: recent.length, difficultyAdj: Math.min(100, rawPct + avgBonus) }
+    const easy = stats['Easy'],   easyOk = !!(easy   && easy.count   >= MIN)
+    const med  = stats['Medium'], medOk  = !!(med    && med.count    >= MIN)
+    const hard = stats['Hard'],   hardOk = !!(hard   && hard.count   >= MIN)
+
+    if      (hardOk && hard!.pct >= 80)                           signals.push({ domain, signal: 'mastered',        pct: hard!.pct,  count: hard!.count,  atDiff: 'Hard'   })
+    else if (medOk  && med!.pct  >= 80)                           signals.push({ domain, signal: 'level-up-hard',   pct: med!.pct,   count: med!.count,   atDiff: 'Medium' })
+    else if (easyOk && easy!.pct >= 80)                           signals.push({ domain, signal: 'level-up-medium', pct: easy!.pct,  count: easy!.count,  atDiff: 'Easy'   })
+    else if (easyOk && easy!.pct < 55)                            signals.push({ domain, signal: 'foundation-gap',  pct: easy!.pct,  count: easy!.count,  atDiff: 'Easy'   })
+    // 55-79% at any level with enough data → "keep practicing" (no signal shown)
+  }
+
+  // Sort: foundation gaps first, then level-ups, then mastered
+  const ORDER: ReadinessSignal['signal'][] = ['foundation-gap', 'level-up-medium', 'level-up-hard', 'mastered']
+  return signals.sort((a, b) => ORDER.indexOf(a.signal) - ORDER.indexOf(b.signal))
+}
+
+function ReadinessPanel({ answers }: { answers: UnifiedAnswer[] }) {
+  const signals = useMemo(() => buildReadinessSignals(answers), [answers])
+
+  if (signals.length === 0) {
+    return (
+      <div className="text-xs text-center py-6" style={{ color: 'var(--text-muted)' }}>
+        Answer 10+ questions per difficulty in each area to see readiness signals
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-1.5 overflow-y-auto" style={{ maxHeight: 280 }}>
+      {signals.map(s => {
+        const cfg = SIGNAL_CFG[s.signal]
+        return (
+          <div key={s.domain} className="flex items-start gap-2.5 px-3 py-2.5 rounded-xl border"
+            style={{ background: cfg.bg, borderColor: cfg.color + '40' }}>
+            <span className="flex-shrink-0 mt-0.5">{cfg.icon}</span>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-semibold truncate" style={{ color: 'var(--foreground)' }}>{s.domain}</p>
+              <p className="text-xs" style={{ color: cfg.color }}>
+                {cfg.label} · {s.pct}% at {s.atDiff} (n={s.count})
+              </p>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ─── Panel 3: 3-Line Trend (per difficulty, immune to difficulty switching) ───
+
+function buildDiffBatches(answers: UnifiedAnswer[], diff: string, batchSize = 5): number[] {
+  const stream = [...answers]
+    .filter(a => a.difficulty === diff)
+    .sort((a, b) => new Date(a.answered_at).getTime() - new Date(b.answered_at).getTime())
+
+  const points: number[] = []
+  for (let i = 0; i + batchSize <= stream.length; i += batchSize) {
+    const chunk = stream.slice(i, i + batchSize)
+    points.push(Math.round(chunk.filter(a => a.is_correct === true).length / batchSize * 100))
+  }
+  // Partial last batch ≥ 3
+  const rem = stream.length % batchSize
+  if (rem >= 3) {
+    const chunk = stream.slice(stream.length - rem)
+    points.push(Math.round(chunk.filter(a => a.is_correct === true).length / chunk.length * 100))
+  }
+  return points
+}
+
+function TrendChart({ answers }: { answers: UnifiedAnswer[] }) {
+  const easyPts  = useMemo(() => buildDiffBatches(answers, 'Easy'),   [answers])
+  const medPts   = useMemo(() => buildDiffBatches(answers, 'Medium'), [answers])
+  const hardPts  = useMemo(() => buildDiffBatches(answers, 'Hard'),   [answers])
+  const maxLen   = Math.max(easyPts.length, medPts.length, hardPts.length)
+
+  if (maxLen < 2) {
+    return (
+      <div className="h-36 flex items-center justify-center rounded-xl border-2 border-dashed text-xs text-center px-4"
+        style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
+        Need 10+ questions per difficulty level to show trend lines
+      </div>
+    )
+  }
+
+  const data = Array.from({ length: maxLen }, (_, i) => ({
+    batch:  `#${i + 1}`,
+    Easy:   easyPts[i]  ?? null,
+    Medium: medPts[i]   ?? null,
+    Hard:   hardPts[i]  ?? null,
+  }))
+
+  const counts = {
+    Easy:   answers.filter(a => a.difficulty === 'Easy').length,
+    Medium: answers.filter(a => a.difficulty === 'Medium').length,
+    Hard:   answers.filter(a => a.difficulty === 'Hard').length,
+  }
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-3">
+        {(['Easy', 'Medium', 'Hard'] as const).map(d => (
+          <div key={d} className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
+            <span className="w-6 h-1.5 rounded-full flex-shrink-0" style={{ background: DIFF_COLORS[d], display: 'inline-block' }} />
+            {d} <span style={{ color: counts[d] > 0 ? DIFF_COLORS[d] : 'var(--text-muted)' }}>({counts[d]} Qs)</span>
+          </div>
+        ))}
+      </div>
+      <ResponsiveContainer width="100%" height={180}>
+        <LineChart data={data} margin={{ top: 8, right: 16, bottom: 0, left: -16 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+          <XAxis dataKey="batch" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} interval="preserveStartEnd" />
+          <YAxis domain={[0, 100]} tickFormatter={v => `${v}%`} tick={{ fontSize: 10, fill: 'var(--text-muted)' }} tickLine={false} axisLine={false} />
+          <Tooltip
+            content={({ active, payload, label }) => {
+              if (!active || !payload?.length) return null
+              return (
+                <div className="rounded-xl border px-3 py-2 text-xs shadow-lg"
+                  style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
+                  <p className="font-semibold mb-1" style={{ color: 'var(--foreground)' }}>Batch {label}</p>
+                  {payload.filter(p => p.value !== null).map(p => {
+                    const dk = p.dataKey as string
+                    return (
+                      <p key={dk} style={{ color: DIFF_COLORS[dk] }}>
+                        {dk}: {p.value}%
+                      </p>
+                    )
+                  })}
+                </div>
+              )
+            }}
+          />
+          <ReferenceLine y={70} strokeDasharray="4 4" stroke="var(--text-muted)" strokeWidth={1} opacity={0.4} />
+          {(['Easy', 'Medium', 'Hard'] as const).map(d => (
+            <Line key={d} type="monotone" dataKey={d} stroke={DIFF_COLORS[d]} strokeWidth={2}
+              dot={{ r: 3, fill: DIFF_COLORS[d], strokeWidth: 0 }} activeDot={{ r: 5 }} connectNulls={false} />
+          ))}
+        </LineChart>
+      </ResponsiveContainer>
+      <p className="text-xs text-center mt-1" style={{ color: 'var(--text-muted)' }}>
+        Each point = 5 consecutive questions at that difficulty · lines are independent — can&apos;t be gamed by switching difficulty
+      </p>
+    </div>
+  )
+}
+
+// ─── Panel 4: True Improvement (difficulty-controlled) ────────────────────────
+
+type ImprovementStat = {
+  key:       string
+  label:     string
+  diffColor: string
+  early:     number
+  recent:    number
+  delta:     number
+  count:     number
+}
+
+function buildImprovementStats(answers: UnifiedAnswer[]): ImprovementStat[] {
+  // Group by domain × difficulty — comparing within the same difficulty level
+  // prevents a student from "improving" simply by switching to easier questions
+  const groups = new Map<string, UnifiedAnswer[]>()
+  for (const a of answers) {
+    const key = `${a.domain || 'Unknown'}|${a.difficulty || 'Unrated'}`
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key)!.push(a)
+  }
+
+  const stats: ImprovementStat[] = []
+  for (const [key, pool] of groups.entries()) {
+    const [domain, difficulty] = key.split('|')
+    // Deduplicate and sort (no recency cap here — we want the full history for trend)
+    const sorted = dedupRecent(pool, 9999)
+    if (sorted.length < 10) continue
+
+    const half      = Math.floor(sorted.length / 2)
+    const earlyPct  = Math.round(sorted.slice(0, half).filter(a => a.is_correct === true).length / half * 100)
+    const recentPct = Math.round(sorted.slice(half).filter(a => a.is_correct === true).length / (sorted.length - half) * 100)
+    const delta     = recentPct - earlyPct
+
+    if (Math.abs(delta) < 5) continue // filter noise < 5 pp
+
+    stats.push({
+      key, delta, count: sorted.length,
+      label:     `${domain} · ${difficulty}`,
+      diffColor: DIFF_COLORS[difficulty] ?? '#6b7280',
+      early:     earlyPct,
+      recent:    recentPct,
     })
-    .filter((g): g is GroupStat => g !== null)
-}
-
-function StatCard({
-  item, color, rank,
-}: {
-  item: GroupStat; color: string; rank: number
-}) {
-  return (
-    <div
-      className="flex items-center gap-3 px-3 py-2.5 rounded-xl border"
-      style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
-      <span className="text-xs font-bold w-5 text-center" style={{ color: 'var(--text-muted)' }}>
-        {rank}
-      </span>
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium truncate" style={{ color: 'var(--foreground)' }}>{item.name}</p>
-        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{item.total} questions</p>
-      </div>
-      <span className="text-sm font-bold flex-shrink-0" style={{ color }}>{item.pct}%</span>
-    </div>
-  )
-}
-
-// Thresholds use the difficulty-adjusted score so Hard questions are fairly classified.
-// A group can only appear in one list — weakness < 65 adj, strength ≥ 75 adj.
-// If nothing clears the threshold, fall back to strict top/bottom halves (no overlap).
-function splitStrengthsWeaknesses(groups: GroupStat[]): { weaknesses: GroupStat[]; strengths: GroupStat[] } {
-  const WEAK_THRESHOLD   = 65
-  const STRONG_THRESHOLD = 75
-
-  let weaknesses = groups.filter(g => g.difficultyAdj < WEAK_THRESHOLD)
-    .sort((a, b) => a.difficultyAdj - b.difficultyAdj)
-    .slice(0, 4)
-
-  let strengths = groups.filter(g => g.difficultyAdj >= STRONG_THRESHOLD)
-    .sort((a, b) => b.difficultyAdj - a.difficultyAdj)
-    .slice(0, 4)
-
-  // Fallback: if either list is empty, split sorted array in half (strictly mutually exclusive)
-  if (weaknesses.length === 0 || strengths.length === 0) {
-    const sorted = [...groups].sort((a, b) => a.difficultyAdj - b.difficultyAdj)
-    const mid = Math.floor(sorted.length / 2)
-    // bottom half → weaknesses, top half → strengths, middle item (odd count) goes to neither
-    weaknesses = sorted.slice(0, mid).slice(0, 4)
-    strengths  = sorted.slice(sorted.length - mid).reverse().slice(0, 4)
   }
-
-  return { weaknesses, strengths }
+  return stats
 }
 
-function StrengthsWeaknessPanel({ answers, filters }: { answers: UnifiedAnswer[]; filters: FilterState }) {
-  const groups = groupAnswers(answers, filters)
+function TrueImprovementPanel({ answers }: { answers: UnifiedAnswer[] }) {
+  const stats      = useMemo(() => buildImprovementStats(answers), [answers])
+  const improving  = stats.filter(s => s.delta > 0).sort((a, b) => b.delta - a.delta).slice(0, 5)
+  const regressing = stats.filter(s => s.delta < 0).sort((a, b) => a.delta - b.delta).slice(0, 5)
 
-  if (groups.length === 0) {
+  if (stats.length === 0) {
     return (
-      <div className="text-sm text-center py-4" style={{ color: 'var(--text-muted)' }}>
-        Not enough data yet
+      <div className="text-xs text-center py-4" style={{ color: 'var(--text-muted)' }}>
+        Need 10+ questions per domain × difficulty level to show improvement trends
       </div>
     )
   }
-
-  const { weaknesses, strengths } = splitStrengthsWeaknesses(groups)
-
-  return (
-    <div className="grid grid-cols-2 gap-4">
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-wider mb-2 flex items-center gap-1.5" style={{ color: '#dc2626' }}>
-          <span>⬇</span> Weaknesses
-        </p>
-        <div className="space-y-1.5">
-          {weaknesses.length > 0
-            ? weaknesses.map((item, i) => (
-                <StatCard key={item.name} item={item} color={scoreColor(item.pct)} rank={i + 1} />
-              ))
-            : <p className="text-xs py-2" style={{ color: 'var(--text-muted)' }}>None identified yet</p>
-          }
-        </div>
-      </div>
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-wider mb-2 flex items-center gap-1.5" style={{ color: '#16a34a' }}>
-          <span>⬆</span> Strengths
-        </p>
-        <div className="space-y-1.5">
-          {strengths.length > 0
-            ? strengths.map((item, i) => (
-                <StatCard key={item.name} item={item} color={scoreColor(item.pct)} rank={i + 1} />
-              ))
-            : <p className="text-xs py-2" style={{ color: 'var(--text-muted)' }}>None identified yet</p>
-          }
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ─── Improving / Regressing panel ─────────────────────────────────────────────
-
-type TrendStat = { name: string; delta: number; early: number; recent: number; total: number }
-
-function ImprovingRegressingPanel({ answers, filters }: { answers: UnifiedAnswer[]; filters: FilterState }) {
-  const getKey = (a: UnifiedAnswer) => {
-    if (filters.skill)   return a.difficulty || 'Unrated'
-    if (filters.domain)  return a.skill      || 'Unknown'
-    if (filters.subject) return a.domain     || 'Unknown'
-    return a.domain || 'Unknown'
-  }
-
-  const sorted = [...answers].sort(
-    (a, b) => new Date(a.answered_at).getTime() - new Date(b.answered_at).getTime()
-  )
-
-  const grouped = new Map<string, UnifiedAnswer[]>()
-  for (const a of sorted) {
-    const key = getKey(a)
-    if (!grouped.has(key)) grouped.set(key, [])
-    grouped.get(key)!.push(a)
-  }
-
-  const trends: TrendStat[] = []
-  for (const [name, items] of grouped.entries()) {
-    if (items.length < 10) continue
-    const mid    = Math.floor(items.length / 2)
-    const early  = items.slice(0, mid)
-    const recent = items.slice(mid)
-    const earlyPct  = Math.round(early.filter(a => a.is_correct).length  / early.length  * 100)
-    const recentPct = Math.round(recent.filter(a => a.is_correct).length / recent.length * 100)
-    trends.push({ name, delta: recentPct - earlyPct, early: earlyPct, recent: recentPct, total: items.length })
-  }
-
-  if (trends.length === 0) {
-    return (
-      <div className="text-sm text-center py-4" style={{ color: 'var(--text-muted)' }}>
-        Need 10+ questions per category to show trends
-      </div>
-    )
-  }
-
-  const improving  = trends.filter(t => t.delta > 0).sort((a, b) => b.delta - a.delta).slice(0, 3)
-  const regressing = trends.filter(t => t.delta < 0).sort((a, b) => a.delta - b.delta).slice(0, 3)
-
   if (improving.length === 0 && regressing.length === 0) {
     return (
-      <div className="text-sm text-center py-4" style={{ color: 'var(--text-muted)' }}>
-        No clear trends yet — keep practicing!
+      <div className="text-xs text-center py-4" style={{ color: 'var(--text-muted)' }}>
+        No meaningful trends yet (changes under 5%) — keep practicing!
+      </div>
+    )
+  }
+
+  function ImpRow({ s }: { s: ImprovementStat }) {
+    const isPos = s.delta > 0
+    return (
+      <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl border"
+        style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
+        <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: s.diffColor }} />
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-semibold truncate" style={{ color: 'var(--foreground)' }}>{s.label}</p>
+          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{s.early}% → {s.recent}% · {s.count} questions</p>
+        </div>
+        <span className="text-sm font-bold flex-shrink-0" style={{ color: isPos ? '#16a34a' : '#dc2626' }}>
+          {isPos ? '+' : ''}{s.delta}%
+        </span>
       </div>
     )
   }
@@ -343,42 +496,20 @@ function ImprovingRegressingPanel({ answers, filters }: { answers: UnifiedAnswer
   return (
     <div className="grid grid-cols-2 gap-4">
       <div>
-        <p className="text-xs font-semibold uppercase tracking-wider mb-2 flex items-center gap-1.5" style={{ color: '#16a34a' }}>
-          🚀 Getting Better
-        </p>
+        <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: '#16a34a' }}>🚀 Improving</p>
         <div className="space-y-1.5">
           {improving.length === 0
             ? <p className="text-xs" style={{ color: 'var(--text-muted)' }}>None yet</p>
-            : improving.map(t => (
-              <div key={t.name} className="flex items-center gap-3 px-3 py-2.5 rounded-xl border"
-                style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate" style={{ color: 'var(--foreground)' }}>{t.name}</p>
-                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{t.early}% → {t.recent}%</p>
-                </div>
-                <span className="text-sm font-bold flex-shrink-0" style={{ color: '#16a34a' }}>+{t.delta}%</span>
-              </div>
-            ))
+            : improving.map(s => <ImpRow key={s.key} s={s} />)
           }
         </div>
       </div>
       <div>
-        <p className="text-xs font-semibold uppercase tracking-wider mb-2 flex items-center gap-1.5" style={{ color: '#dc2626' }}>
-          ⚠️ Getting Worse
-        </p>
+        <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: '#dc2626' }}>⚠️ Declining</p>
         <div className="space-y-1.5">
           {regressing.length === 0
-            ? <p className="text-xs" style={{ color: 'var(--text-muted)' }}>None — nice work!</p>
-            : regressing.map(t => (
-              <div key={t.name} className="flex items-center gap-3 px-3 py-2.5 rounded-xl border"
-                style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate" style={{ color: 'var(--foreground)' }}>{t.name}</p>
-                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{t.early}% → {t.recent}%</p>
-                </div>
-                <span className="text-sm font-bold flex-shrink-0" style={{ color: '#dc2626' }}>{t.delta}%</span>
-              </div>
-            ))
+            ? <p className="text-xs" style={{ color: 'var(--text-muted)' }}>None — great work!</p>
+            : regressing.map(s => <ImpRow key={s.key} s={s} />)
           }
         </div>
       </div>
@@ -846,19 +977,15 @@ export default function AnalyticsClient({ student, allStudents, answers, isTeach
         )}
       </div>
 
-      {/* ── Top panels: Strengths / Weaknesses + Improving / Regressing ──── */}
-      <div className="grid grid-cols-2 gap-4">
-        <div className="rounded-2xl border p-4" style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
-          <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>
-            Strengths & Weaknesses
-          </p>
-          <StrengthsWeaknessPanel answers={dedupedAnswers} filters={filters} />
-        </div>
-        <div className="rounded-2xl border p-4" style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
-          <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>
-            Trends Over Time
-          </p>
-          <ImprovingRegressingPanel answers={dedupedAnswers} filters={filters} />
+      {/* ── Panel 1: Performance by Difficulty ─────────────────────────── */}
+      <div className="rounded-2xl border p-4" style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
+        <p className="text-xs font-semibold uppercase tracking-wider mb-4" style={{ color: 'var(--text-muted)' }}>
+          Performance by Difficulty
+        </p>
+        <div className="grid grid-cols-2 gap-6">
+          {[...new Set(answers.map(a => a.subject))].sort().map(subj => (
+            <DifficultyBarChart key={subj} answers={answers} subject={subj} />
+          ))}
         </div>
       </div>
 
@@ -977,40 +1104,48 @@ export default function AnalyticsClient({ student, allStudents, answers, isTeach
         </div>
       </div>
 
-      {/* ── Trend chart ────────────────────────────────────────────────────── */}
-      <div className="rounded-2xl border p-4" style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
-        <div className="flex items-center justify-between mb-3">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
-              Accuracy Over Time
-            </p>
-            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              Each dot = 5-question batch · dashed line = 70% target
-            </p>
-          </div>
-          {/* Summary stats */}
-          <div className="flex items-center gap-5">
-            <div className="text-right">
-              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Overall</p>
-              <p className="text-xl font-bold" style={{ color: scoreColor(totalPct) }}>
-                {totalPct !== null ? `${totalPct}%` : '—'}
-              </p>
-            </div>
-            <div className="text-right">
-              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Questions</p>
-              <p className="text-xl font-bold" style={{ color: 'var(--foreground)' }}>{totalAnswered}</p>
-            </div>
-            <div className="text-right">
-              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>✓ / ✗</p>
-              <p className="text-xl font-bold">
-                <span style={{ color: '#16a34a' }}>{totalCorrect}</span>
-                <span style={{ color: 'var(--text-muted)' }}> / </span>
-                <span style={{ color: '#dc2626' }}>{totalAnswered - totalCorrect}</span>
-              </p>
-            </div>
-          </div>
+      {/* ── Panel 2 + 3: Readiness Signals + Trend Chart ───────────────── */}
+      <div className="grid gap-4" style={{ gridTemplateColumns: '2fr 3fr' }}>
+        <div className="rounded-2xl border p-4" style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
+          <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>
+            Readiness Signals
+          </p>
+          <ReadinessPanel answers={answers} />
         </div>
-        <TrendChart answers={dedupedAnswers} />
+        <div className="rounded-2xl border p-4" style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
+          <div className="flex items-center justify-between mb-1">
+            <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+              Accuracy Over Time by Difficulty
+            </p>
+            {/* Overall summary stats */}
+            <div className="flex items-center gap-4">
+              <div className="text-right">
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Overall</p>
+                <p className="text-base font-bold" style={{ color: scoreColor(totalPct) }}>
+                  {totalPct !== null ? `${totalPct}%` : '—'}
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Unique Qs</p>
+                <p className="text-base font-bold" style={{ color: 'var(--foreground)' }}>{totalAnswered}</p>
+              </div>
+            </div>
+          </div>
+          <TrendChart answers={dedupedAnswers} />
+        </div>
+      </div>
+
+      {/* ── Panel 4: True Improvement ──────────────────────────────────── */}
+      <div className="rounded-2xl border p-4" style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
+        <div className="mb-3">
+          <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+            Improvement Over Time
+          </p>
+          <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+            Compares first half vs second half of attempts within the same domain × difficulty — immune to difficulty switching
+          </p>
+        </div>
+        <TrueImprovementPanel answers={dedupedAnswers} />
       </div>
 
       {/* ── Action bar ─────────────────────────────────────────────────────── */}
