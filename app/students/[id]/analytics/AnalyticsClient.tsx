@@ -630,16 +630,20 @@ export default function AnalyticsClient({ student, allStudents, answers, isTeach
 
   // ── Generate practice problems ───────────────────────────────────────────────
 
+  const buildReqFilters = useCallback(() => {
+    const reqFilters: Record<string, unknown> = {}
+    if (filters.subject)    reqFilters.subject      = filters.subject
+    if (filters.domain)     reqFilters.domain       = filters.domain
+    if (filters.skill)      reqFilters.skill        = filters.skill
+    if (filters.difficulty) reqFilters.difficulties = [filters.difficulty]
+    return reqFilters
+  }, [filters])
+
   const handleGenerate = useCallback(async () => {
     setGenerating(true)
     setGenError(null)
     try {
-      // Build filters for the recommend call
-      const reqFilters: Record<string, unknown> = {}
-      if (filters.subject)    reqFilters.subject    = filters.subject
-      if (filters.domain)     reqFilters.domain     = filters.domain
-      if (filters.skill)      reqFilters.skill      = filters.skill
-      if (filters.difficulty) reqFilters.difficulties = [filters.difficulty]
+      const reqFilters = buildReqFilters()
 
       const recRes = await fetch('/api/practice/recommend', {
         method: 'POST',
@@ -673,7 +677,35 @@ export default function AnalyticsClient({ student, allStudents, answers, isTeach
       setGenError(String(err))
       setGenerating(false)
     }
-  }, [filters, router])
+  }, [filters, router, buildReqFilters])
+
+  // Teacher: generate questions targeting this student's weaknesses → open worksheet builder
+  const handleTeacherGenerate = useCallback(async () => {
+    setGenerating(true)
+    setGenError(null)
+    try {
+      const reqFilters = buildReqFilters()
+
+      const recRes = await fetch('/api/practice/recommend', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filters: reqFilters, count: 10, studentId: student.id }),
+      })
+      const recData = await recRes.json()
+      if (!recRes.ok || !recData.questions?.length) {
+        setGenError(recData.error ?? 'No questions found. Try broadening the filter.')
+        setGenerating(false)
+        return
+      }
+
+      const questionIds: string[] = recData.questions.map((q: { id: string }) => q.id)
+      // Navigate to worksheet builder with questions pre-loaded and student pre-selected
+      router.push(`/worksheets/new?q=${questionIds.join(',')}&student=${student.id}`)
+    } catch (err) {
+      setGenError(String(err))
+      setGenerating(false)
+    }
+  }, [filters, router, student.id, buildReqFilters])
 
   // ── Empty state ─────────────────────────────────────────────────────────────
 
@@ -972,21 +1004,50 @@ export default function AnalyticsClient({ student, allStudents, answers, isTeach
         </div>
       )}
 
-      {/* Teacher can still see the analyze drawer */}
-      {isTeacher && filteredAnswers.length > 0 && (
-        <div className="flex gap-3">
+      {/* Teacher action bar */}
+      {isTeacher && (
+        <div className="flex flex-wrap gap-3">
           <button
-            onClick={() => setShowAnalyze(true)}
-            className="flex items-center gap-2 px-5 py-3 rounded-xl font-semibold text-sm border transition-colors"
-            style={{ borderColor: 'var(--border)', color: 'var(--foreground)', background: 'var(--card)' }}>
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-            </svg>
-            Analyze Problems
-            <span className="px-1.5 py-0.5 rounded-full text-xs" style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
-              {filteredAnswers.length}
-            </span>
+            onClick={handleTeacherGenerate}
+            disabled={generating}
+            className="flex items-center gap-2 px-5 py-3 rounded-xl font-semibold text-sm text-white transition-opacity disabled:opacity-60"
+            style={{ background: 'var(--accent)' }}>
+            {generating ? (
+              <>
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                Building worksheet…
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                Generate Targeted Worksheet
+              </>
+            )}
           </button>
+
+          {filteredAnswers.length > 0 && (
+            <button
+              onClick={() => setShowAnalyze(true)}
+              className="flex items-center gap-2 px-5 py-3 rounded-xl font-semibold text-sm border transition-colors"
+              style={{ borderColor: 'var(--border)', color: 'var(--foreground)', background: 'var(--card)' }}>
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+              </svg>
+              Analyze Problems
+              <span className="px-1.5 py-0.5 rounded-full text-xs" style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
+                {filteredAnswers.length}
+              </span>
+            </button>
+          )}
+
+          {genError && (
+            <p className="text-sm self-center" style={{ color: '#dc2626' }}>{genError}</p>
+          )}
         </div>
       )}
 

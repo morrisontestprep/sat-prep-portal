@@ -16,7 +16,8 @@ import OpenAI from 'openai'
 //
 // Body: {
 //   filters?: { subject?: string; domain?: string; skill?: string; difficulties?: string[] }
-//   count?: number   // default 10
+//   count?: number      // default 10
+//   studentId?: string  // teacher override — look at a specific student's wrong answers
 // }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -50,25 +51,33 @@ export async function POST(request: Request) {
     const {
       filters = {},
       count = 10,
+      studentId: requestedStudentId,
     }: {
       filters?: { subject?: string; domain?: string; skill?: string; difficulties?: string[] }
       count?: number
+      studentId?: string
     } = body
 
     const requestedCount = Math.min(Math.max(Number(count) || 10, 1), 30)
+
+    // Teacher can pass a studentId to look at a specific student's wrong answers.
+    // Students can only look at their own data.
+    const TEACHER_EMAIL = process.env.TEACHER_EMAIL ?? 'morrisontestprep@gmail.com'
+    const isTeacher = user.email === TEACHER_EMAIL
+    const targetStudentId = (isTeacher && requestedStudentId) ? requestedStudentId : user.id
 
     // ── 1. Collect all seen question IDs across all 3 sources ────────────────
     const assignmentIds = await supabase
       .from('student_assignments')
       .select('id')
-      .eq('student_id', user.id)
+      .eq('student_id', targetStudentId)
       .then(r => (r.data ?? []).map((a: { id: string }) => a.id))
 
     const [wsResult, rushResult, practiceResult] = await Promise.all([
       assignmentIds.length > 0
         ? supabase.from('student_answers').select('question_id, is_correct').in('assignment_id', assignmentIds)
         : Promise.resolve({ data: [] }),
-      supabase.from('sat_rush_answers').select('question_id, is_correct').eq('student_id', user.id),
+      supabase.from('sat_rush_answers').select('question_id, is_correct').eq('student_id', targetStudentId),
       supabase.from('practice_answers').select('question_id, is_correct').eq('student_id', user.id),
     ])
 

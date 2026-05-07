@@ -43,9 +43,11 @@ function QuestionBlock({ q }: { q: Question }) {
 export default function WorksheetEditor({
   initialQuestions,
   students,
+  initialStudentId,
 }: {
   initialQuestions: Question[]
   students: Student[]
+  initialStudentId?: string
 }) {
   const router = useRouter()
   const supabase = createClient()
@@ -58,8 +60,10 @@ export default function WorksheetEditor({
   const [showAssign, setShowAssign] = useState(false)
   const [savedId, setSavedId] = useState<string | null>(null)
 
-  // Assign modal state
-  const [selectedStudents, setSelectedStudents] = useState<Set<string>>(new Set())
+  // Assign modal state — pre-select student if coming from analytics
+  const [selectedStudents, setSelectedStudents] = useState<Set<string>>(
+    initialStudentId ? new Set([initialStudentId]) : new Set()
+  )
   const [dueDate, setDueDate] = useState('')
   const [assigning, setAssigning] = useState(false)
   const [assignDone, setAssignDone] = useState(false)

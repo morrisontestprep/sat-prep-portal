@@ -7,9 +7,9 @@ import WorksheetEditor from './WorksheetEditor'
 export default async function NewWorksheetPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string }>
+  searchParams: Promise<{ q?: string; student?: string }>
 }) {
-  const { q } = await searchParams
+  const { q, student: initialStudentId } = await searchParams
   const questionIds = q ? q.split(',').filter(Boolean) : []
 
   const cookieStore = await cookies()
@@ -50,6 +50,7 @@ export default async function NewWorksheetPage({
         <WorksheetEditor
           initialQuestions={questions as { id: string; subject: string; domain: string; skill: string; difficulty: string }[]}
           students={students ?? []}
+          initialStudentId={initialStudentId}
         />
       </div>
     </div>
