@@ -156,6 +156,8 @@ type GroupStat = { name: string; pct: number; correct: number; total: number; di
 // 65% on Hard ≈ 80% on Easy when classifying strength vs. weakness.
 const DIFF_BONUS: Record<string, number> = { Easy: 0, Medium: 8, Hard: 16, Unrated: 4 }
 
+const RECENCY_WINDOW = 30
+
 function groupAnswers(answers: UnifiedAnswer[], f: FilterState): GroupStat[] {
   // Decide grouping dimension based on current filter depth
   const getKey = (a: UnifiedAnswer) => {
@@ -165,23 +167,31 @@ function groupAnswers(answers: UnifiedAnswer[], f: FilterState): GroupStat[] {
     return a.domain || 'Unknown'
   }
 
-  const map = new Map<string, { correct: number; total: number; diffSum: number }>()
+  // Group all answers by key, sorted chronologically (answers already sorted by answered_at)
+  const buckets = new Map<string, UnifiedAnswer[]>()
   for (const a of answers) {
     const key = getKey(a)
-    if (!map.has(key)) map.set(key, { correct: 0, total: 0, diffSum: 0 })
-    const g = map.get(key)!
-    g.total++
-    if (a.is_correct === true) g.correct++
-    g.diffSum += DIFF_BONUS[a.difficulty || 'Unrated'] ?? 4
+    if (!buckets.has(key)) buckets.set(key, [])
+    buckets.get(key)!.push(a)
   }
 
-  return Array.from(map.entries())
-    .filter(([, g]) => g.total >= 5)
-    .map(([name, g]) => {
-      const rawPct = Math.round(g.correct / g.total * 100)
-      const avgBonus = g.diffSum / g.total
-      return { name, pct: rawPct, correct: g.correct, total: g.total, difficultyAdj: Math.min(100, rawPct + avgBonus) }
+  return Array.from(buckets.entries())
+    .map(([name, all]) => {
+      // Take only the most recent RECENCY_WINDOW answers for this group
+      const recent = all.slice(-RECENCY_WINDOW)
+      if (recent.length < 5) return null
+
+      let correct = 0, diffSum = 0
+      for (const a of recent) {
+        if (a.is_correct === true) correct++
+        diffSum += DIFF_BONUS[a.difficulty || 'Unrated'] ?? 4
+      }
+
+      const rawPct = Math.round(correct / recent.length * 100)
+      const avgBonus = diffSum / recent.length
+      return { name, pct: rawPct, correct, total: recent.length, difficultyAdj: Math.min(100, rawPct + avgBonus) }
     })
+    .filter((g): g is GroupStat => g !== null)
 }
 
 function StatCard({
