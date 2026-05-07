@@ -623,6 +623,17 @@ export default function AnalyticsClient({ student, allStudents, answers, isTeach
 
   const filteredAnswers = useMemo(() => applyFilters(answers, filters), [answers, filters])
 
+  // For all accuracy metrics, keep only the most recent attempt per question.
+  // filteredAnswers is already sorted chronologically, so iterating in order and
+  // overwriting means the last entry per question_id wins.
+  const dedupedAnswers = useMemo(() => {
+    const latest = new Map<string, UnifiedAnswer>()
+    for (const a of filteredAnswers) latest.set(a.question_id, a)
+    return [...latest.values()].sort(
+      (a, b) => new Date(a.answered_at).getTime() - new Date(b.answered_at).getTime()
+    )
+  }, [filteredAnswers])
+
   // Available filter options — always derived from the full answer set, not filtered
   const subjects = useMemo(() => [...new Set(answers.map(a => a.subject))].sort(), [answers])
 
@@ -652,8 +663,8 @@ export default function AnalyticsClient({ student, allStudents, answers, isTeach
     [answers, filters.subject, filters.domain]
   )
 
-  const totalCorrect  = filteredAnswers.filter(a => a.is_correct === true).length
-  const totalAnswered = filteredAnswers.length
+  const totalCorrect  = dedupedAnswers.filter(a => a.is_correct === true).length
+  const totalAnswered = dedupedAnswers.length
   const totalPct      = pct(totalCorrect, totalAnswered)
 
   const sourceCounts = useMemo(() => {
@@ -841,13 +852,13 @@ export default function AnalyticsClient({ student, allStudents, answers, isTeach
           <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>
             Strengths & Weaknesses
           </p>
-          <StrengthsWeaknessPanel answers={filteredAnswers} filters={filters} />
+          <StrengthsWeaknessPanel answers={dedupedAnswers} filters={filters} />
         </div>
         <div className="rounded-2xl border p-4" style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
           <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>
             Trends Over Time
           </p>
-          <ImprovingRegressingPanel answers={filteredAnswers} filters={filters} />
+          <ImprovingRegressingPanel answers={dedupedAnswers} filters={filters} />
         </div>
       </div>
 
@@ -999,7 +1010,7 @@ export default function AnalyticsClient({ student, allStudents, answers, isTeach
             </div>
           </div>
         </div>
-        <TrendChart answers={filteredAnswers} />
+        <TrendChart answers={dedupedAnswers} />
       </div>
 
       {/* ── Action bar ─────────────────────────────────────────────────────── */}
