@@ -364,9 +364,13 @@ function TrendChart({ answers }: { answers: UnifiedAnswer[] }) {
   return (
     <div>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-3">
-        {(['Easy', 'Medium', 'Hard'] as const).map(d => (
+        {([
+          ['Easy',   '——',   'none'],
+          ['Medium', '╌╌',   '8 4'],
+          ['Hard',   '···',  '3 3'],
+        ] as const).map(([d, symbol]) => (
           <div key={d} className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
-            <span className="w-6 h-1.5 rounded-full flex-shrink-0" style={{ background: DIFF_COLORS[d], display: 'inline-block' }} />
+            <span className="font-bold flex-shrink-0 w-5 text-center" style={{ color: DIFF_COLORS[d] }}>{symbol}</span>
             {d} <span style={{ color: counts[d] > 0 ? DIFF_COLORS[d] : 'var(--text-muted)' }}>({counts[d]} Qs)</span>
           </div>
         ))}
@@ -396,10 +400,22 @@ function TrendChart({ answers }: { answers: UnifiedAnswer[] }) {
             }}
           />
           <ReferenceLine y={70} strokeDasharray="4 4" stroke="var(--text-muted)" strokeWidth={1} opacity={0.4} />
-          {(['Easy', 'Medium', 'Hard'] as const).map(d => (
-            <Line key={d} type="monotone" dataKey={d} stroke={DIFF_COLORS[d]} strokeWidth={2}
-              dot={{ r: 3, fill: DIFF_COLORS[d], strokeWidth: 0 }} activeDot={{ r: 5 }} connectNulls={false} />
-          ))}
+          {/* Each difficulty gets a distinct dash pattern so overlapping lines stay legible */}
+          <Line key="Easy"   type="monotone" dataKey="Easy"
+            stroke={DIFF_COLORS['Easy']}   strokeWidth={3}
+            strokeDasharray="none"
+            dot={{ r: 5, fill: DIFF_COLORS['Easy'],   stroke: 'var(--card)', strokeWidth: 2 }}
+            activeDot={{ r: 7 }} connectNulls={false} />
+          <Line key="Medium" type="monotone" dataKey="Medium"
+            stroke={DIFF_COLORS['Medium']} strokeWidth={3}
+            strokeDasharray="8 4"
+            dot={{ r: 5, fill: DIFF_COLORS['Medium'], stroke: 'var(--card)', strokeWidth: 2 }}
+            activeDot={{ r: 7 }} connectNulls={false} />
+          <Line key="Hard"   type="monotone" dataKey="Hard"
+            stroke={DIFF_COLORS['Hard']}   strokeWidth={3}
+            strokeDasharray="3 3"
+            dot={{ r: 5, fill: DIFF_COLORS['Hard'],   stroke: 'var(--card)', strokeWidth: 2 }}
+            activeDot={{ r: 7 }} connectNulls={false} />
         </LineChart>
       </ResponsiveContainer>
       <p className="text-xs text-center mt-1" style={{ color: 'var(--text-muted)' }}>
