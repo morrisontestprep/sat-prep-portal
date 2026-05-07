@@ -150,7 +150,11 @@ function TrendChart({ answers }: { answers: UnifiedAnswer[] }) {
 
 // ─── Strengths & Weaknesses panel ─────────────────────────────────────────────
 
-type GroupStat = { name: string; pct: number; correct: number; total: number }
+type GroupStat = { name: string; pct: number; correct: number; total: number; difficultyAdj: number }
+
+// Difficulty-adjusted score: hard questions are graded on a curve so that
+// 65% on Hard ≈ 80% on Easy when classifying strength vs. weakness.
+const DIFF_BONUS: Record<string, number> = { Easy: 0, Medium: 8, Hard: 16, Unrated: 4 }
 
 function groupAnswers(answers: UnifiedAnswer[], f: FilterState): GroupStat[] {
   // Decide grouping dimension based on current filter depth
@@ -161,18 +165,23 @@ function groupAnswers(answers: UnifiedAnswer[], f: FilterState): GroupStat[] {
     return a.domain || 'Unknown'
   }
 
-  const map = new Map<string, { correct: number; total: number }>()
+  const map = new Map<string, { correct: number; total: number; diffSum: number }>()
   for (const a of answers) {
     const key = getKey(a)
-    if (!map.has(key)) map.set(key, { correct: 0, total: 0 })
+    if (!map.has(key)) map.set(key, { correct: 0, total: 0, diffSum: 0 })
     const g = map.get(key)!
     g.total++
     if (a.is_correct === true) g.correct++
+    g.diffSum += DIFF_BONUS[a.difficulty || 'Unrated'] ?? 4
   }
 
   return Array.from(map.entries())
     .filter(([, g]) => g.total >= 5)
-    .map(([name, g]) => ({ name, pct: Math.round(g.correct / g.total * 100), ...g }))
+    .map(([name, g]) => {
+      const rawPct = Math.round(g.correct / g.total * 100)
+      const avgBonus = g.diffSum / g.total
+      return { name, pct: rawPct, correct: g.correct, total: g.total, difficultyAdj: Math.min(100, rawPct + avgBonus) }
+    })
 }
 
 function StatCard({
@@ -196,6 +205,33 @@ function StatCard({
   )
 }
 
+// Thresholds use the difficulty-adjusted score so Hard questions are fairly classified.
+// A group can only appear in one list — weakness < 65 adj, strength ≥ 75 adj.
+// If nothing clears the threshold, fall back to strict top/bottom halves (no overlap).
+function splitStrengthsWeaknesses(groups: GroupStat[]): { weaknesses: GroupStat[]; strengths: GroupStat[] } {
+  const WEAK_THRESHOLD   = 65
+  const STRONG_THRESHOLD = 75
+
+  let weaknesses = groups.filter(g => g.difficultyAdj < WEAK_THRESHOLD)
+    .sort((a, b) => a.difficultyAdj - b.difficultyAdj)
+    .slice(0, 4)
+
+  let strengths = groups.filter(g => g.difficultyAdj >= STRONG_THRESHOLD)
+    .sort((a, b) => b.difficultyAdj - a.difficultyAdj)
+    .slice(0, 4)
+
+  // Fallback: if either list is empty, split sorted array in half (strictly mutually exclusive)
+  if (weaknesses.length === 0 || strengths.length === 0) {
+    const sorted = [...groups].sort((a, b) => a.difficultyAdj - b.difficultyAdj)
+    const mid = Math.floor(sorted.length / 2)
+    // bottom half → weaknesses, top half → strengths, middle item (odd count) goes to neither
+    weaknesses = sorted.slice(0, mid).slice(0, 4)
+    strengths  = sorted.slice(sorted.length - mid).reverse().slice(0, 4)
+  }
+
+  return { weaknesses, strengths }
+}
+
 function StrengthsWeaknessPanel({ answers, filters }: { answers: UnifiedAnswer[]; filters: FilterState }) {
   const groups = groupAnswers(answers, filters)
 
@@ -207,9 +243,7 @@ function StrengthsWeaknessPanel({ answers, filters }: { answers: UnifiedAnswer[]
     )
   }
 
-  const sorted   = [...groups].sort((a, b) => a.pct - b.pct)
-  const weakest  = sorted.slice(0, 4)
-  const strongest = [...groups].sort((a, b) => b.pct - a.pct).slice(0, 4)
+  const { weaknesses, strengths } = splitStrengthsWeaknesses(groups)
 
   return (
     <div className="grid grid-cols-2 gap-4">
@@ -218,9 +252,12 @@ function StrengthsWeaknessPanel({ answers, filters }: { answers: UnifiedAnswer[]
           <span>⬇</span> Weaknesses
         </p>
         <div className="space-y-1.5">
-          {weakest.map((item, i) => (
-            <StatCard key={item.name} item={item} color={scoreColor(item.pct)} rank={i + 1} />
-          ))}
+          {weaknesses.length > 0
+            ? weaknesses.map((item, i) => (
+                <StatCard key={item.name} item={item} color={scoreColor(item.pct)} rank={i + 1} />
+              ))
+            : <p className="text-xs py-2" style={{ color: 'var(--text-muted)' }}>None identified yet</p>
+          }
         </div>
       </div>
       <div>
@@ -228,9 +265,12 @@ function StrengthsWeaknessPanel({ answers, filters }: { answers: UnifiedAnswer[]
           <span>⬆</span> Strengths
         </p>
         <div className="space-y-1.5">
-          {strongest.map((item, i) => (
-            <StatCard key={item.name} item={item} color={scoreColor(item.pct)} rank={i + 1} />
-          ))}
+          {strengths.length > 0
+            ? strengths.map((item, i) => (
+                <StatCard key={item.name} item={item} color={scoreColor(item.pct)} rank={i + 1} />
+              ))
+            : <p className="text-xs py-2" style={{ color: 'var(--text-muted)' }}>None identified yet</p>
+          }
         </div>
       </div>
     </div>
