@@ -17,10 +17,20 @@ interface DesmosInstance {
   resize: () => void
 }
 
+type ResizeDir = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
+
 const MIN_W = 320
 const MIN_H = 280
 const DEFAULT_W = 520
 const DEFAULT_H = 580
+
+// Cursor style for each resize direction
+const DIR_CURSOR: Record<ResizeDir, string> = {
+  n: 'ns-resize', s: 'ns-resize',
+  e: 'ew-resize', w: 'ew-resize',
+  ne: 'nesw-resize', sw: 'nesw-resize',
+  nw: 'nwse-resize', se: 'nwse-resize',
+}
 
 export default function DesmosCalculator() {
   const [open, setOpen] = useState(false)
@@ -44,9 +54,10 @@ export default function DesmosCalculator() {
   const dragging = useRef(false)
   const dragOrigin = useRef({ mx: 0, my: 0, px: 0, py: 0 })
 
-  // Resize
+  // Resize — track direction + all four starting values (pos + size)
   const resizing = useRef(false)
-  const resizeOrigin = useRef({ mx: 0, my: 0, w: 0, h: 0 })
+  const resizeDirRef = useRef<ResizeDir | null>(null)
+  const resizeOrigin = useRef({ mx: 0, my: 0, w: 0, h: 0, px: 0, py: 0 })
 
   // ── Position the panel at bottom-right on first open ─────────────────────
   useEffect(() => {
@@ -56,7 +67,7 @@ export default function DesmosCalculator() {
       const panelW = Math.min(DEFAULT_W, w - 48)
       const panelH = Math.min(DEFAULT_H, h - 120)
       const x = w - panelW - 24
-      const y = h - panelH - 88        // clear the toggle button
+      const y = h - panelH - 88
       posRef.current = { x, y }
       sizeRef.current = { w: panelW, h: panelH }
       setPos({ x, y })
@@ -74,34 +85,70 @@ export default function DesmosCalculator() {
         const x = Math.max(0, Math.min(dragOrigin.current.px + dx, window.innerWidth - sizeRef.current.w))
         const y = Math.max(0, Math.min(dragOrigin.current.py + dy, window.innerHeight - 50))
         posRef.current = { x, y }
-        // Move the panel directly via ref for smoothness — no state update mid-drag
         if (panelRef.current) {
           panelRef.current.style.left = `${x}px`
           panelRef.current.style.top = `${y}px`
         }
+        return
       }
-      if (resizing.current) {
+
+      if (resizing.current && resizeDirRef.current) {
+        const dir = resizeDirRef.current
         const dx = e.clientX - resizeOrigin.current.mx
         const dy = e.clientY - resizeOrigin.current.my
-        const w = Math.max(MIN_W, Math.min(resizeOrigin.current.w + dx, window.innerWidth - 48))
-        const h = Math.max(MIN_H, Math.min(resizeOrigin.current.h + dy, window.innerHeight - 80))
-        sizeRef.current = { w, h }
-        if (panelRef.current) {
-          panelRef.current.style.width = `${w}px`
-          panelRef.current.style.height = `${h}px`
+
+        let newW = resizeOrigin.current.w
+        let newH = resizeOrigin.current.h
+        let newX = resizeOrigin.current.px
+        let newY = resizeOrigin.current.py
+
+        // East — expand/shrink from the right
+        if (dir.includes('e')) {
+          newW = Math.max(MIN_W, resizeOrigin.current.w + dx)
         }
-        // Tell Desmos to re-measure
+        // West — expand/shrink from the left (position moves with it)
+        if (dir.includes('w')) {
+          const raw = resizeOrigin.current.w - dx
+          newW = Math.max(MIN_W, raw)
+          newX = resizeOrigin.current.px + (resizeOrigin.current.w - newW)
+        }
+        // South — expand/shrink from the bottom
+        if (dir === 's' || dir === 'se' || dir === 'sw') {
+          newH = Math.max(MIN_H, resizeOrigin.current.h + dy)
+        }
+        // North — expand/shrink from the top (position moves with it)
+        if (dir === 'n' || dir === 'ne' || dir === 'nw') {
+          const raw = resizeOrigin.current.h - dy
+          newH = Math.max(MIN_H, raw)
+          newY = resizeOrigin.current.py + (resizeOrigin.current.h - newH)
+        }
+
+        // Clamp to viewport
+        newW = Math.min(newW, window.innerWidth - newX - 4)
+        newH = Math.min(newH, window.innerHeight - newY - 4)
+        newX = Math.max(0, newX)
+        newY = Math.max(0, newY)
+
+        sizeRef.current = { w: newW, h: newH }
+        posRef.current = { x: newX, y: newY }
+
+        if (panelRef.current) {
+          panelRef.current.style.width = `${newW}px`
+          panelRef.current.style.height = `${newH}px`
+          panelRef.current.style.left = `${newX}px`
+          panelRef.current.style.top = `${newY}px`
+        }
         instanceRef.current?.resize()
       }
     }
 
     const onUp = () => {
       if (dragging.current || resizing.current) {
-        // Commit final position/size to React state
         setPos({ ...posRef.current })
         setSize({ ...sizeRef.current })
         dragging.current = false
         resizing.current = false
+        resizeDirRef.current = null
         document.body.style.userSelect = ''
         document.body.style.cursor = ''
       }
@@ -117,7 +164,7 @@ export default function DesmosCalculator() {
 
   // ── Drag start (header) ───────────────────────────────────────────────────
   const onDragStart = useCallback((e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest('button')) return   // don't drag on mode/close buttons
+    if ((e.target as HTMLElement).closest('button')) return
     dragging.current = true
     dragOrigin.current = { mx: e.clientX, my: e.clientY, px: posRef.current.x, py: posRef.current.y }
     document.body.style.userSelect = 'none'
@@ -125,11 +172,17 @@ export default function DesmosCalculator() {
     e.preventDefault()
   }, [])
 
-  // ── Resize start (corner handle) ─────────────────────────────────────────
-  const onResizeStart = useCallback((e: React.MouseEvent) => {
+  // ── Resize start — accepts a direction ───────────────────────────────────
+  const onResizeStart = useCallback((dir: ResizeDir) => (e: React.MouseEvent) => {
     resizing.current = true
-    resizeOrigin.current = { mx: e.clientX, my: e.clientY, w: sizeRef.current.w, h: sizeRef.current.h }
+    resizeDirRef.current = dir
+    resizeOrigin.current = {
+      mx: e.clientX, my: e.clientY,
+      w: sizeRef.current.w, h: sizeRef.current.h,
+      px: posRef.current.x, py: posRef.current.y,
+    }
     document.body.style.userSelect = 'none'
+    document.body.style.cursor = DIR_CURSOR[dir]
     e.preventDefault()
     e.stopPropagation()
   }, [])
@@ -196,7 +249,7 @@ export default function DesmosCalculator() {
       {open && (
         <div
           ref={panelRef}
-          className="fixed z-40 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+          className="fixed z-40 rounded-2xl shadow-2xl flex flex-col"
           style={{
             left: pos.x,
             top: pos.y,
@@ -206,78 +259,105 @@ export default function DesmosCalculator() {
             border: '1px solid var(--border)',
             minWidth: MIN_W,
             minHeight: MIN_H,
+            overflow: 'visible',  // allow resize handles to sit on edges
           }}
         >
-          {/* ── Header (drag handle) ────────────────────────────────────── */}
-          <div
-            onMouseDown={onDragStart}
-            className="flex items-center justify-between px-3 py-2 flex-shrink-0 border-b select-none"
-            style={{
-              borderColor: 'var(--border)',
-              background: 'var(--card)',
-              cursor: 'grab',
-            }}
-          >
-            {/* Drag grip dots */}
-            <div className="flex items-center gap-2.5">
-              <svg className="w-3.5 h-3.5 flex-shrink-0" viewBox="0 0 16 16" fill="currentColor"
-                style={{ color: 'var(--text-muted)', opacity: 0.5 }}>
-                <circle cx="4" cy="4" r="1.5"/><circle cx="4" cy="8" r="1.5"/><circle cx="4" cy="12" r="1.5"/>
-                <circle cx="9" cy="4" r="1.5"/><circle cx="9" cy="8" r="1.5"/><circle cx="9" cy="12" r="1.5"/>
-              </svg>
+          {/* ── Resize handles — edges ────────────────────────────────────── */}
+          {/* Top edge */}
+          <div onMouseDown={onResizeStart('n')}
+            className="absolute" style={{ top: -4, left: 12, right: 12, height: 8, cursor: 'ns-resize', zIndex: 20 }} />
+          {/* Bottom edge */}
+          <div onMouseDown={onResizeStart('s')}
+            className="absolute" style={{ bottom: -4, left: 12, right: 12, height: 8, cursor: 'ns-resize', zIndex: 20 }} />
+          {/* Left edge */}
+          <div onMouseDown={onResizeStart('w')}
+            className="absolute" style={{ left: -4, top: 12, bottom: 12, width: 8, cursor: 'ew-resize', zIndex: 20 }} />
+          {/* Right edge */}
+          <div onMouseDown={onResizeStart('e')}
+            className="absolute" style={{ right: -4, top: 12, bottom: 12, width: 8, cursor: 'ew-resize', zIndex: 20 }} />
 
-              {/* Mode switcher */}
-              <div className="flex items-center gap-0.5 rounded-md p-0.5"
-                style={{ background: 'var(--background)' }}>
-                {(['graphing', 'scientific'] as const).map(m => (
-                  <button
-                    key={m}
-                    onMouseDown={e => e.stopPropagation()}
-                    onClick={() => setMode(m)}
-                    className="px-2.5 py-0.5 rounded text-xs font-medium transition-colors"
-                    style={{
-                      background: mode === m ? 'var(--accent)' : 'transparent',
-                      color: mode === m ? 'white' : 'var(--text-muted)',
-                    }}>
-                    {m === 'graphing' ? 'Graphing' : 'Scientific'}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Close */}
-            <button
-              onMouseDown={e => e.stopPropagation()}
-              onClick={() => setOpen(false)}
-              className="w-6 h-6 rounded flex items-center justify-center hover:opacity-70"
-              style={{ color: 'var(--text-muted)', cursor: 'pointer' }}>
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-
-          {/* ── Calculator mount ─────────────────────────────────────────── */}
-          <div ref={containerRef} className="flex-1 w-full" style={{ minHeight: 0 }} />
-
-          {/* Loading overlay */}
-          {!scriptLoaded && (
-            <div className="absolute inset-0 flex items-center justify-center rounded-2xl"
-              style={{ background: 'var(--card)' }}>
-              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Loading calculator…</p>
-            </div>
-          )}
-
-          {/* ── Resize handle (bottom-right corner) ─────────────────────── */}
-          <div
-            onMouseDown={onResizeStart}
-            className="absolute bottom-0 right-0 w-5 h-5 flex items-end justify-end pb-1 pr-1"
-            style={{ cursor: 'nwse-resize', zIndex: 10 }}
-          >
+          {/* ── Resize handles — corners ──────────────────────────────────── */}
+          {/* Top-left */}
+          <div onMouseDown={onResizeStart('nw')}
+            className="absolute" style={{ top: -4, left: -4, width: 16, height: 16, cursor: 'nwse-resize', zIndex: 21 }} />
+          {/* Top-right */}
+          <div onMouseDown={onResizeStart('ne')}
+            className="absolute" style={{ top: -4, right: -4, width: 16, height: 16, cursor: 'nesw-resize', zIndex: 21 }} />
+          {/* Bottom-left */}
+          <div onMouseDown={onResizeStart('sw')}
+            className="absolute" style={{ bottom: -4, left: -4, width: 16, height: 16, cursor: 'nesw-resize', zIndex: 21 }} />
+          {/* Bottom-right */}
+          <div onMouseDown={onResizeStart('se')}
+            className="absolute flex items-end justify-end pb-1 pr-1"
+            style={{ bottom: -4, right: -4, width: 16, height: 16, cursor: 'nwse-resize', zIndex: 21 }}>
             <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-              <path d="M9 1L1 9M9 5L5 9M9 9" stroke="currentColor" strokeWidth="1.5"
+              <path d="M9 1L1 9M9 5L5 9" stroke="currentColor" strokeWidth="1.5"
                 strokeLinecap="round" style={{ color: 'var(--text-muted)', opacity: 0.5 }} />
             </svg>
+          </div>
+
+          {/* ── Inner content (clipped) ───────────────────────────────────── */}
+          <div className="flex flex-col w-full h-full rounded-2xl overflow-hidden">
+
+            {/* ── Header (drag handle) ──────────────────────────────────── */}
+            <div
+              onMouseDown={onDragStart}
+              className="flex items-center justify-between px-3 py-2 flex-shrink-0 border-b select-none"
+              style={{
+                borderColor: 'var(--border)',
+                background: 'var(--card)',
+                cursor: 'grab',
+              }}
+            >
+              {/* Drag grip dots */}
+              <div className="flex items-center gap-2.5">
+                <svg className="w-3.5 h-3.5 flex-shrink-0" viewBox="0 0 16 16" fill="currentColor"
+                  style={{ color: 'var(--text-muted)', opacity: 0.5 }}>
+                  <circle cx="4" cy="4" r="1.5"/><circle cx="4" cy="8" r="1.5"/><circle cx="4" cy="12" r="1.5"/>
+                  <circle cx="9" cy="4" r="1.5"/><circle cx="9" cy="8" r="1.5"/><circle cx="9" cy="12" r="1.5"/>
+                </svg>
+
+                {/* Mode switcher */}
+                <div className="flex items-center gap-0.5 rounded-md p-0.5"
+                  style={{ background: 'var(--background)' }}>
+                  {(['graphing', 'scientific'] as const).map(m => (
+                    <button
+                      key={m}
+                      onMouseDown={e => e.stopPropagation()}
+                      onClick={() => setMode(m)}
+                      className="px-2.5 py-0.5 rounded text-xs font-medium transition-colors"
+                      style={{
+                        background: mode === m ? 'var(--accent)' : 'transparent',
+                        color: mode === m ? 'white' : 'var(--text-muted)',
+                      }}>
+                      {m === 'graphing' ? 'Graphing' : 'Scientific'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Close */}
+              <button
+                onMouseDown={e => e.stopPropagation()}
+                onClick={() => setOpen(false)}
+                className="w-6 h-6 rounded flex items-center justify-center hover:opacity-70"
+                style={{ color: 'var(--text-muted)', cursor: 'pointer' }}>
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* ── Calculator mount ────────────────────────────────────────── */}
+            <div ref={containerRef} className="flex-1 w-full" style={{ minHeight: 0 }} />
+
+            {/* Loading overlay */}
+            {!scriptLoaded && (
+              <div className="absolute inset-0 flex items-center justify-center rounded-2xl"
+                style={{ background: 'var(--card)' }}>
+                <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Loading calculator…</p>
+              </div>
+            )}
           </div>
         </div>
       )}

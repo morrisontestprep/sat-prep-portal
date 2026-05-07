@@ -150,6 +150,8 @@ export default function GuideEditorModal({
   const [domain, setDomain]         = useState(guide.domain ?? '')
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>('saved')
   const [loaded, setLoaded]         = useState(false)
+  const [fontSize, setFontSize]     = useState('15')
+  const contentInitializedRef       = useRef(false)
   const [selectedImg, setSelectedImg] = useState<{ el: HTMLImageElement; rect: DOMRect } | null>(null)
 
   // Math equation state
@@ -195,13 +197,16 @@ export default function GuideEditorModal({
     })
   }, [])
 
-  // -- Load content ----------------------------------------------------------
+  // -- Load content (once on mount only — re-running this would reset innerHTML
+  //    and jump the cursor whenever an autosave completes) -------------------
   useEffect(() => {
-    if (!editorRef.current) return
+    if (!editorRef.current || contentInitializedRef.current) return
     editorRef.current.innerHTML = guide.content ?? ''
     rerenderMath(editorRef.current)
+    contentInitializedRef.current = true
     setLoaded(true)
-  }, [guide.content, rerenderMath])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Also re-render when KaTeX finishes loading (content may already be there)
   useEffect(() => {
@@ -349,6 +354,21 @@ export default function GuideEditorModal({
   const execCmd = (cmd: string, value?: string) => {
     document.execCommand(cmd, false, value)
     editorRef.current?.focus()
+    scheduleAutoSave()
+  }
+
+  // -- Font size -------------------------------------------------------------
+  const applyFontSize = (sizePx: string) => {
+    setFontSize(sizePx)
+    editorRef.current?.focus()
+    // Use the "7" size as a marker, then replace font tags with styled spans
+    document.execCommand('fontSize', false, '7')
+    editorRef.current?.querySelectorAll('font[size="7"]').forEach(font => {
+      const span = document.createElement('span')
+      span.style.fontSize = sizePx + 'px'
+      while (font.firstChild) span.appendChild(font.firstChild)
+      font.parentNode?.replaceChild(span, font)
+    })
     scheduleAutoSave()
   }
 
@@ -509,6 +529,21 @@ export default function GuideEditorModal({
         {/* ---- Toolbar --------------------------------------------------- */}
         <div className="px-5 py-2 border-b flex items-center gap-1 flex-wrap flex-shrink-0 relative"
           style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
+
+          {/* Font size */}
+          <select
+            value={fontSize}
+            onMouseDown={e => e.stopPropagation()}
+            onChange={e => applyFontSize(e.target.value)}
+            title="Font size"
+            className="h-7 px-1 rounded text-xs border outline-none"
+            style={{ borderColor: 'var(--border)', background: 'var(--background)', color: 'var(--foreground)', width: 52 }}
+          >
+            {[10, 12, 13, 14, 15, 16, 18, 20, 24, 28, 32, 36, 48, 72].map(s => (
+              <option key={s} value={String(s)}>{s}</option>
+            ))}
+          </select>
+          <Divider />
 
           <ToolbarBtn onMouseDown={() => execCmd('bold')} title="Bold"><strong>B</strong></ToolbarBtn>
           <ToolbarBtn onMouseDown={() => execCmd('italic')} title="Italic"><em>I</em></ToolbarBtn>
