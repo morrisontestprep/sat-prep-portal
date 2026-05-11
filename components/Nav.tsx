@@ -2,8 +2,10 @@
 
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
+import { useState } from 'react'
 import { createClient } from '@/utils/supabase/client'
 import NotificationBell from './NotificationBell'
+import TeacherNotificationBell from './TeacherNotificationBell'
 
 const teacherNav = [
   { href: '/dashboard', label: 'Dashboard', icon: (
@@ -67,6 +69,7 @@ export default function Nav({ userEmail }: { userEmail?: string }) {
   const pathname = usePathname()
   const router = useRouter()
   const supabase = createClient()
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
   const isTeacher = userEmail === TEACHER_EMAIL
 
@@ -78,51 +81,121 @@ export default function Nav({ userEmail }: { userEmail?: string }) {
   const navItems = isTeacher ? teacherNav : studentNav
 
   return (
-    <nav className="border-b px-6 py-3 flex items-center justify-between" style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
-      <div className="flex items-center gap-6">
-        <Link href={isTeacher ? '/dashboard' : '/my-assignments'} className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'var(--accent)' }}>
-            <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-            </svg>
-          </div>
-          <span className="font-semibold text-sm" style={{ color: 'var(--foreground)' }}>SAT Prep</span>
-        </Link>
+    <nav className="border-b" style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
+      {/* ── Main bar ────────────────────────────────────────────────── */}
+      <div className="px-4 sm:px-6 py-3 flex items-center justify-between">
 
-        <div className="flex items-center gap-1">
-          {navItems.map(item => {
-            const active = pathname === item.href || pathname.startsWith(item.href + '/')
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
-                style={{
-                  background: active ? 'var(--accent-light)' : 'transparent',
-                  color: active ? 'var(--accent)' : 'var(--text-muted)',
-                }}
-              >
-                {item.icon}
-                {item.label}
-              </Link>
-            )
-          })}
+        {/* Left: Logo + desktop nav links */}
+        <div className="flex items-center gap-6">
+          <Link href={isTeacher ? '/dashboard' : '/my-assignments'} className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: 'var(--accent)' }}>
+              <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+              </svg>
+            </div>
+            <span className="font-semibold text-sm" style={{ color: 'var(--foreground)' }}>SAT Prep</span>
+          </Link>
+
+          {/* Desktop nav links — hidden on mobile */}
+          <div className="hidden sm:flex items-center gap-1">
+            {navItems.map(item => {
+              const active = pathname === item.href || pathname.startsWith(item.href + '/')
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
+                  style={{
+                    background: active ? 'var(--accent-light)' : 'transparent',
+                    color: active ? 'var(--accent)' : 'var(--text-muted)',
+                  }}
+                >
+                  {item.icon}
+                  {item.label}
+                </Link>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Right: Notification + desktop controls + mobile hamburger */}
+        <div className="flex items-center gap-2 sm:gap-3">
+          {isTeacher  && <TeacherNotificationBell />}
+          {!isTeacher && <NotificationBell />}
+
+          {/* Desktop: email + sign out */}
+          {userEmail && (
+            <span className="hidden sm:inline text-xs" style={{ color: 'var(--text-muted)' }}>{userEmail}</span>
+          )}
+          <button
+            onClick={handleSignOut}
+            className="hidden sm:block text-sm px-3 py-1.5 rounded-lg transition-colors"
+            style={{ color: 'var(--text-muted)' }}
+          >
+            Sign out
+          </button>
+
+          {/* Mobile: hamburger button */}
+          <button
+            className="sm:hidden p-1.5 rounded-lg transition-colors"
+            style={{ color: 'var(--text-muted)' }}
+            onClick={() => setMobileMenuOpen(prev => !prev)}
+            aria-label="Toggle menu"
+          >
+            {mobileMenuOpen ? (
+              /* X icon */
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            ) : (
+              /* Hamburger icon */
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            )}
+          </button>
         </div>
       </div>
 
-      <div className="flex items-center gap-3">
-        {!isTeacher && <NotificationBell />}
-        {userEmail && (
-          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{userEmail}</span>
-        )}
-        <button
-          onClick={handleSignOut}
-          className="text-sm px-3 py-1.5 rounded-lg transition-colors"
-          style={{ color: 'var(--text-muted)' }}
-        >
-          Sign out
-        </button>
-      </div>
+      {/* ── Mobile dropdown menu ─────────────────────────────────────── */}
+      {mobileMenuOpen && (
+        <div className="sm:hidden border-t px-4 pb-4 pt-3" style={{ borderColor: 'var(--border)' }}>
+          <div className="space-y-1">
+            {navItems.map(item => {
+              const active = pathname === item.href || pathname.startsWith(item.href + '/')
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors"
+                  style={{
+                    background: active ? 'var(--accent-light)' : 'transparent',
+                    color: active ? 'var(--accent)' : 'var(--foreground)',
+                  }}
+                >
+                  {item.icon}
+                  {item.label}
+                </Link>
+              )
+            })}
+          </div>
+
+          {/* Sign out row */}
+          <div className="mt-3 pt-3 border-t flex items-center justify-between" style={{ borderColor: 'var(--border)' }}>
+            {userEmail && (
+              <span className="text-xs truncate mr-3" style={{ color: 'var(--text-muted)' }}>{userEmail}</span>
+            )}
+            <button
+              onClick={handleSignOut}
+              className="text-sm px-3 py-1.5 rounded-lg flex-shrink-0"
+              style={{ color: 'var(--text-muted)' }}
+            >
+              Sign out
+            </button>
+          </div>
+        </div>
+      )}
     </nav>
   )
 }

@@ -48,14 +48,14 @@ export default async function DashboardPage() {
     <div className="min-h-screen flex flex-col">
       <Nav userEmail={user.email} />
 
-      <main className="flex-1 p-6 max-w-5xl mx-auto w-full">
+      <main className="flex-1 p-4 sm:p-6 max-w-5xl mx-auto w-full">
         <div className="mb-6">
           <h1 className="text-2xl font-bold" style={{ color: 'var(--foreground)' }}>Dashboard</h1>
           <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>Welcome back, {user.email}</p>
         </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-3 gap-4 mb-8">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
           <div className="rounded-xl border p-5" style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
             <p className="text-sm font-medium mb-1" style={{ color: 'var(--text-muted)' }}>Question Bank</p>
             <p className="text-3xl font-bold" style={{ color: 'var(--foreground)' }}>{totalQuestions?.toLocaleString()}</p>
@@ -76,7 +76,7 @@ export default async function DashboardPage() {
         </div>
 
         {/* Quick actions */}
-        <div className="grid grid-cols-2 gap-4 mb-8">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
           <Link
             href="/questions"
             className="rounded-xl border p-5 flex items-start gap-4 hover:shadow-sm transition-shadow group"

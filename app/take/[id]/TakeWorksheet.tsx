@@ -65,6 +65,7 @@ export default function TakeWorksheet({
   const [redoing, setRedoing] = useState(false)
   const [justSubmitted, setJustSubmitted] = useState(false)
   const [freeResponseInput, setFreeResponseInput] = useState('')
+  const [isMobile, setIsMobile] = useState(false)
   // Explanations keyed by question_id, fetched once the worksheet is complete
   const [explanations, setExplanations] = useState<Record<string, Array<{ text: string; canvasData: string | null }>>>({})
 
@@ -75,6 +76,13 @@ export default function TakeWorksheet({
   const reviewResizing   = useRef(false)
   const reviewResizeStartX = useRef(0)
   const reviewResizeStartW = useRef(0)
+
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 640)
+    check()
+    window.addEventListener('resize', check)
+    return () => window.removeEventListener('resize', check)
+  }, [])
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
@@ -258,7 +266,7 @@ export default function TakeWorksheet({
 
     const { error } = await supabase
       .from('student_assignments')
-      .update({ status: 'complete' })
+      .update({ status: 'complete', completed_at: new Date().toISOString() })
       .eq('id', assignmentId)
 
     if (error) {
@@ -296,6 +304,7 @@ export default function TakeWorksheet({
         correctCount: finalCorrect,
         totalQuestions,
         worksheetId,
+        assignmentId,
       }),
     }).catch(console.error)
   }
@@ -378,7 +387,7 @@ export default function TakeWorksheet({
           </div>
 
           {/* Actions */}
-          <div className="flex items-center justify-center gap-3">
+          <div className="flex flex-wrap items-center justify-center gap-3">
             <button onClick={() => setJustSubmitted(false)}
               className="px-5 py-2.5 rounded-xl text-sm font-medium border"
               style={{ borderColor: 'var(--border)', color: 'var(--foreground)' }}>
@@ -414,7 +423,7 @@ export default function TakeWorksheet({
       <main className="flex-1 flex flex-col" style={{ minHeight: 0 }}>
 
         {/* ── Top bar (same style as active quiz) ───────────────────────── */}
-        <div className="border-b px-6 py-3 flex-shrink-0"
+        <div className="border-b px-4 sm:px-6 py-3 flex-shrink-0"
           style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-3">
@@ -467,12 +476,12 @@ export default function TakeWorksheet({
           </div>
         </div>
 
-        {/* ── Two-column body ────────────────────────────────────────────── */}
+        {/* ── Two-column body (stacked on mobile, side-by-side on desktop) ── */}
         {reviewQ && (
-          <div className="flex-1 flex overflow-hidden min-h-0">
+          <div className={`flex-1 flex min-h-0 ${isMobile ? 'flex-col overflow-y-auto' : 'flex-row overflow-hidden'}`}>
 
-            {/* LEFT: Question + answer result — independent scroll */}
-            <div className="flex-1 min-h-0 overflow-y-auto px-5 py-6">
+            {/* LEFT: Question + answer result */}
+            <div className={`${isMobile ? '' : 'flex-1 min-h-0 overflow-y-auto'} px-5 py-6`}>
               {/* Question header */}
               <div className="flex items-center gap-3 mb-4">
                 <span className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0"
@@ -522,7 +531,7 @@ export default function TakeWorksheet({
                   )}
                 </div>
               ) : (
-                <div className="grid grid-cols-4 gap-2 mb-4">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
                   {CHOICES.map(choice => {
                     const isSelected      = reviewA?.selected === choice
                     const isCorrectAnswer = reviewQ.correct_answer === choice
@@ -556,9 +565,9 @@ export default function TakeWorksheet({
               )}
             </div>
 
-            {/* Drag handle — drag left to make explanation panel wider */}
+            {/* Drag handle — desktop only */}
             <div
-              className="w-1.5 flex-shrink-0 hover:bg-blue-400 transition-colors cursor-col-resize"
+              className={`${isMobile ? 'hidden' : ''} w-1.5 flex-shrink-0 hover:bg-blue-400 transition-colors cursor-col-resize`}
               style={{ background: 'var(--border)' }}
               title="Drag to resize explanation panel"
               onMouseDown={e => {
@@ -571,11 +580,16 @@ export default function TakeWorksheet({
               }}
             />
 
-            {/* RIGHT: Instructor explanation (resizable, independent scroll) */}
+            {/* RIGHT: Instructor explanation (resizable on desktop, full-width on mobile) */}
             <div
               ref={reviewPanelRef}
               className="flex-shrink-0 min-h-0 overflow-y-auto"
-              style={{ width: reviewPanelW, background: 'var(--background)', overscrollBehavior: 'contain' }}>
+              style={{
+                width: isMobile ? '100%' : reviewPanelW,
+                background: 'var(--background)',
+                overscrollBehavior: 'contain',
+                borderTop: isMobile ? '1px solid var(--border)' : undefined,
+              }}>
               {reviewExp.length > 0 ? (
                 <div className="px-4 py-4 space-y-4">
                   <p className="text-xs font-semibold uppercase tracking-wider"
@@ -651,7 +665,7 @@ export default function TakeWorksheet({
   return (
     <main className="flex-1 flex flex-col" style={{ minHeight: 0 }}>
       {/* Top bar with progress */}
-      <div className="border-b px-6 py-3 flex-shrink-0" style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
+      <div className="border-b px-4 sm:px-6 py-3 flex-shrink-0" style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
         <div className="max-w-2xl mx-auto">
           <div className="flex items-center justify-between mb-2">
             <p className="text-sm font-medium" style={{ color: 'var(--foreground)' }}>
