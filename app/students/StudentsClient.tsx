@@ -31,11 +31,16 @@ type GuideInfo = {
   domain: string | null
 }
 
+type WBShareItem = { shareId: string; boardId: string; boardName: string; accessLevel: string }
+type WBStudentBoard = { shareId: string; boardId: string; boardName: string }
+
 type Props = {
   students: Student[]
   assignmentsByStudent: Record<string, Assignment[]>
   allGuides: GuideInfo[]
   sharesByStudent: Record<string, string[]>
+  wbSharedWithStudents: Record<string, WBShareItem[]>
+  wbStudentBoardsForTeacher: Record<string, WBStudentBoard[]>
 }
 
 // Group assignments by worksheet so redos collapse into one row
@@ -104,12 +109,15 @@ function fmtWithYear(iso: string) {
 
 function StudentCard({
   student, assignments, allGuides, initialSharedIds, onDeleted,
+  initialWbShared, initialWbStudentBoards,
 }: {
   student: Student
   assignments: Assignment[]
   allGuides: GuideInfo[]
   initialSharedIds: string[]
   onDeleted: (id: string) => void
+  initialWbShared: WBShareItem[]
+  initialWbStudentBoards: WBStudentBoard[]
 }) {
   const supabase = createClient()
   const [expanded, setExpanded]           = useState(false)
@@ -117,9 +125,12 @@ function StudentCard({
   const [deleting, setDeleting]           = useState(false)
   const [showMasterFile, setShowMasterFile] = useState(false)
   const [showGuides, setShowGuides]       = useState(false)
+  const [showWhiteboards, setShowWhiteboards] = useState(false)
   const [sharedIds, setSharedIds]         = useState<Set<string>>(new Set(initialSharedIds))
   const [togglingId, setTogglingId]       = useState<string | null>(null)
   const [notifyOnShare, setNotifyOnShare] = useState(true)
+  const [wbShared, setWbShared]           = useState<WBShareItem[]>(initialWbShared)
+  const [revokingId, setRevokingId]       = useState<string | null>(null)
 
   // Due date editing
   const [editingDueDateId, setEditingDueDateId] = useState<string | null>(null)
@@ -210,7 +221,17 @@ function StudentCard({
     setEditingDueDateId(null)
   }
 
+  const revokeWbShare = async (shareId: string, boardId: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!confirm('Revoke this student\'s access to the whiteboard?')) return
+    setRevokingId(shareId)
+    await fetch(`/api/whiteboards/${boardId}/share?shareId=${shareId}`, { method: 'DELETE' })
+    setWbShared(prev => prev.filter(s => s.shareId !== shareId))
+    setRevokingId(null)
+  }
+
   const sharedCount = allGuides.filter(g => sharedIds.has(g.id)).length
+  const wbCount = wbShared.length + initialWbStudentBoards.length
 
   return (
     <>
@@ -248,7 +269,7 @@ function StudentCard({
 
           {/* Guides button */}
           <button
-            onClick={e => { e.stopPropagation(); setShowGuides(o => !o) }}
+            onClick={e => { e.stopPropagation(); setShowGuides(o => !o); setShowWhiteboards(false) }}
             className="text-xs px-2.5 py-1 rounded-lg font-medium border transition-colors flex items-center gap-1.5"
             style={{
               borderColor: showGuides ? 'var(--accent)' : 'var(--border)',
@@ -261,6 +282,25 @@ function StudentCard({
               <span className="px-1.5 py-0 rounded-full text-white leading-5"
                 style={{ background: 'var(--accent)', fontSize: 10 }}>
                 {sharedCount}
+              </span>
+            )}
+          </button>
+
+          {/* Whiteboards button */}
+          <button
+            onClick={e => { e.stopPropagation(); setShowWhiteboards(o => !o); setShowGuides(false) }}
+            className="text-xs px-2.5 py-1 rounded-lg font-medium border transition-colors flex items-center gap-1.5"
+            style={{
+              borderColor: showWhiteboards ? 'var(--accent)' : 'var(--border)',
+              color: showWhiteboards ? 'var(--accent)' : 'var(--foreground)',
+              background: showWhiteboards ? 'var(--accent-light)' : 'var(--background)',
+            }}
+          >
+            Boards
+            {wbCount > 0 && (
+              <span className="px-1.5 py-0 rounded-full text-white leading-5"
+                style={{ background: 'var(--accent)', fontSize: 10 }}>
+                {wbCount}
               </span>
             )}
           </button>
@@ -373,6 +413,99 @@ function StudentCard({
                 )
               })}
             </div>
+          )}
+        </div>
+      )}
+
+      {/* Whiteboards panel */}
+      {showWhiteboards && (
+        <div className="border-t" style={{ borderColor: 'var(--border)' }}>
+          <div className="px-6 py-3" style={{ background: 'var(--background)' }}>
+            <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+              Whiteboards
+            </p>
+          </div>
+
+          {/* Boards teacher shared with this student */}
+          {wbShared.length > 0 && (
+            <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
+              <p className="px-6 py-1.5 text-xs font-medium" style={{ color: 'var(--text-muted)', background: 'var(--background)' }}>
+                Shared with {student.full_name || 'student'}
+              </p>
+              {wbShared.map(wb => (
+                <div key={wb.shareId} className="px-6 py-3 flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="w-7 h-7 rounded-lg flex-shrink-0 flex items-center justify-center"
+                      style={{ background: 'var(--accent-light)' }}>
+                      <svg className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                          d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                      </svg>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate" style={{ color: 'var(--foreground)' }}>
+                        {wb.boardName}
+                      </p>
+                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                        {wb.accessLevel === 'edit' ? 'Can edit' : 'View only'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <a href={`/whiteboards/${wb.boardId}`} target="_blank" rel="noreferrer"
+                      className="text-xs px-3 py-1 rounded-lg font-medium text-white"
+                      style={{ background: 'var(--accent)' }}
+                      onClick={e => e.stopPropagation()}>
+                      Open
+                    </a>
+                    <button
+                      onClick={e => revokeWbShare(wb.shareId, wb.boardId, e)}
+                      disabled={revokingId === wb.shareId}
+                      className="text-xs px-2.5 py-1 rounded-lg font-medium border transition-colors disabled:opacity-50"
+                      style={{ borderColor: '#fca5a5', color: '#ef4444', background: '#fef2f2' }}>
+                      {revokingId === wb.shareId ? '…' : 'Revoke'}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Boards student shared back with teacher */}
+          {initialWbStudentBoards.length > 0 && (
+            <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
+              <p className="px-6 py-1.5 text-xs font-medium border-t" style={{ color: 'var(--text-muted)', background: 'var(--background)', borderColor: 'var(--border)' }}>
+                Shared by {student.full_name || 'student'} with you
+              </p>
+              {initialWbStudentBoards.map(wb => (
+                <div key={wb.shareId} className="px-6 py-3 flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="w-7 h-7 rounded-lg flex-shrink-0 flex items-center justify-center"
+                      style={{ background: '#f0fdf4' }}>
+                      <svg className="w-3.5 h-3.5" style={{ color: '#16a34a' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                          d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                      </svg>
+                    </div>
+                    <p className="text-sm font-medium truncate" style={{ color: 'var(--foreground)' }}>
+                      {wb.boardName}
+                    </p>
+                  </div>
+                  <a href={`/whiteboards/${wb.boardId}`} target="_blank" rel="noreferrer"
+                    className="flex-shrink-0 text-xs px-3 py-1 rounded-lg font-medium text-white"
+                    style={{ background: '#16a34a' }}
+                    onClick={e => e.stopPropagation()}>
+                    Open
+                  </a>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {wbShared.length === 0 && initialWbStudentBoards.length === 0 && (
+            <p className="px-6 py-4 text-sm" style={{ color: 'var(--text-muted)' }}>
+              No whiteboards shared yet.
+            </p>
           )}
         </div>
       )}
@@ -564,7 +697,10 @@ function StudentCard({
   )
 }
 
-export default function StudentsClient({ students: initialStudents, assignmentsByStudent, allGuides, sharesByStudent }: Props) {
+export default function StudentsClient({
+  students: initialStudents, assignmentsByStudent, allGuides, sharesByStudent,
+  wbSharedWithStudents, wbStudentBoardsForTeacher,
+}: Props) {
   const [students, setStudents] = useState(initialStudents)
   const handleDeleted = (id: string) => setStudents(prev => prev.filter(s => s.id !== id))
 
@@ -590,6 +726,8 @@ export default function StudentsClient({ students: initialStudents, assignmentsB
           allGuides={allGuides}
           initialSharedIds={sharesByStudent[student.id] ?? []}
           onDeleted={handleDeleted}
+          initialWbShared={wbSharedWithStudents[student.id] ?? []}
+          initialWbStudentBoards={wbStudentBoardsForTeacher[student.id] ?? []}
         />
       ))}
     </div>

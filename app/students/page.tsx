@@ -45,6 +45,48 @@ export default async function StudentsPage() {
     allShares = data
   } catch { /* table not yet created */ }
 
+  // Fetch whiteboard shares: teacher→student and student→teacher
+  const studentIds = (students ?? []).map(s => s.id)
+  type WBShareItem = { shareId: string; boardId: string; boardName: string; accessLevel: string }
+  type WBStudentBoard = { shareId: string; boardId: string; boardName: string }
+  let wbSharedWithStudents: Record<string, WBShareItem[]> = {}
+  let wbStudentBoardsForTeacher: Record<string, WBStudentBoard[]> = {}
+
+  if (studentIds.length > 0) {
+    // Teacher → student shares (boards teacher created, shared with students)
+    const { data: t2s } = await supabase
+      .from('whiteboard_shares')
+      .select('id, shared_with, access_level, whiteboards(id, name, created_by)')
+      .in('shared_with', studentIds)
+      .is('revoked_at', null)
+
+    for (const s of (t2s ?? []) as any[]) {
+      const board = s.whiteboards
+      if (!board || board.created_by !== user.id) continue
+      if (!wbSharedWithStudents[s.shared_with]) wbSharedWithStudents[s.shared_with] = []
+      wbSharedWithStudents[s.shared_with].push({
+        shareId: s.id, boardId: board.id, boardName: board.name || 'Untitled Board', accessLevel: s.access_level,
+      })
+    }
+
+    // Student → teacher shares (boards students created, shared with teacher)
+    const { data: s2t } = await supabase
+      .from('whiteboard_shares')
+      .select('id, whiteboards(id, name, created_by)')
+      .eq('shared_with', user.id)
+      .is('revoked_at', null)
+
+    for (const s of (s2t ?? []) as any[]) {
+      const board = s.whiteboards
+      if (!board) continue
+      if (!studentIds.includes(board.created_by)) continue
+      if (!wbStudentBoardsForTeacher[board.created_by]) wbStudentBoardsForTeacher[board.created_by] = []
+      wbStudentBoardsForTeacher[board.created_by].push({
+        shareId: s.id, boardId: board.id, boardName: board.name || 'Untitled Board',
+      })
+    }
+  }
+
   // Group assignments by student
   type Assignment = {
     id: string
@@ -90,6 +132,8 @@ export default async function StudentsPage() {
           assignmentsByStudent={assignmentsByStudent}
           allGuides={(allGuides ?? []) as { id: string; title: string; subject: string | null; domain: string | null }[]}
           sharesByStudent={sharesByStudent}
+          wbSharedWithStudents={wbSharedWithStudents}
+          wbStudentBoardsForTeacher={wbStudentBoardsForTeacher}
         />
       </main>
     </div>

@@ -51,6 +51,11 @@ const studentNav = [
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
     </svg>
   )},
+  { href: '/whiteboards', label: 'Whiteboards', icon: (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+    </svg>
+  )},
   { href: '/extra-materials', label: 'Extra Materials', icon: (
     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
@@ -70,12 +75,21 @@ export default function Nav({ userEmail }: { userEmail?: string }) {
   const router = useRouter()
   const supabase = createClient()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [creatingBoard, setCreatingBoard]   = useState(false)
 
   const isTeacher = userEmail === TEACHER_EMAIL
 
   const handleSignOut = async () => {
     await supabase.auth.signOut()
     router.push('/login')
+  }
+
+  const handleCreateWhiteboard = async () => {
+    setCreatingBoard(true)
+    const res = await fetch('/api/whiteboards', { method: 'POST' })
+    const { id } = await res.json()
+    setCreatingBoard(false)
+    if (id) window.open(`/whiteboards/${id}`, '_blank')
   }
 
   const navItems = isTeacher ? teacherNav : studentNav
@@ -118,10 +132,25 @@ export default function Nav({ userEmail }: { userEmail?: string }) {
           </div>
         </div>
 
-        {/* Right: Notification + desktop controls + mobile hamburger */}
+        {/* Right: bells + teacher create button + desktop controls + hamburger */}
         <div className="flex items-center gap-2 sm:gap-3">
           {isTeacher  && <TeacherNotificationBell />}
           {!isTeacher && <NotificationBell />}
+
+          {/* Teacher: Create Whiteboard button (desktop) */}
+          {isTeacher && (
+            <button
+              onClick={handleCreateWhiteboard}
+              disabled={creatingBoard}
+              className="hidden sm:flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium text-white disabled:opacity-60"
+              style={{ background: 'var(--accent)' }}>
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+              </svg>
+              {creatingBoard ? '…' : '+ Whiteboard'}
+            </button>
+          )}
 
           {/* Desktop: email + sign out */}
           {userEmail && (
@@ -135,7 +164,7 @@ export default function Nav({ userEmail }: { userEmail?: string }) {
             Sign out
           </button>
 
-          {/* Mobile: hamburger button */}
+          {/* Mobile: hamburger */}
           <button
             className="sm:hidden p-1.5 rounded-lg transition-colors"
             style={{ color: 'var(--text-muted)' }}
@@ -143,12 +172,10 @@ export default function Nav({ userEmail }: { userEmail?: string }) {
             aria-label="Toggle menu"
           >
             {mobileMenuOpen ? (
-              /* X icon */
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
             ) : (
-              /* Hamburger icon */
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
               </svg>
@@ -157,7 +184,7 @@ export default function Nav({ userEmail }: { userEmail?: string }) {
         </div>
       </div>
 
-      {/* ── Mobile dropdown menu ─────────────────────────────────────── */}
+      {/* ── Mobile dropdown ─────────────────────────────────────────── */}
       {mobileMenuOpen && (
         <div className="sm:hidden border-t px-4 pb-4 pt-3" style={{ borderColor: 'var(--border)' }}>
           <div className="space-y-1">
@@ -179,9 +206,20 @@ export default function Nav({ userEmail }: { userEmail?: string }) {
                 </Link>
               )
             })}
+            {isTeacher && (
+              <button
+                onClick={() => { setMobileMenuOpen(false); handleCreateWhiteboard() }}
+                disabled={creatingBoard}
+                className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium w-full text-left"
+                style={{ color: 'var(--accent)' }}>
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                </svg>
+                {creatingBoard ? 'Creating…' : '+ Create Whiteboard'}
+              </button>
+            )}
           </div>
-
-          {/* Sign out row */}
           <div className="mt-3 pt-3 border-t flex items-center justify-between" style={{ borderColor: 'var(--border)' }}>
             {userEmail && (
               <span className="text-xs truncate mr-3" style={{ color: 'var(--text-muted)' }}>{userEmail}</span>
@@ -189,8 +227,7 @@ export default function Nav({ userEmail }: { userEmail?: string }) {
             <button
               onClick={handleSignOut}
               className="text-sm px-3 py-1.5 rounded-lg flex-shrink-0"
-              style={{ color: 'var(--text-muted)' }}
-            >
+              style={{ color: 'var(--text-muted)' }}>
               Sign out
             </button>
           </div>
