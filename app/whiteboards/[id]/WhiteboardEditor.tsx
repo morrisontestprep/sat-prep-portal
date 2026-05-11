@@ -159,7 +159,8 @@ export default function WhiteboardEditor({
   const [sharing,     setSharing]     = useState(false)
   const [shareError,  setShareError]  = useState<string | null>(null)
 
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const saveTimer    = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const textInputRef = useRef<HTMLInputElement>(null)
 
   // ── Load initial canvas data ───────────────────────────────────────────────
   useEffect(() => {
@@ -289,6 +290,15 @@ export default function WhiteboardEditor({
     window.addEventListener('resize', resize)
     return () => window.removeEventListener('resize', resize)
   }, [scheduleRender])
+
+  // ── Focus text input when text tool places a pin ──────────────────────────
+  useEffect(() => {
+    if (textPos) {
+      // Short delay lets the input mount before we try to focus it
+      const t = setTimeout(() => textInputRef.current?.focus(), 50)
+      return () => clearTimeout(t)
+    }
+  }, [textPos])
 
   // ── Auto-save ─────────────────────────────────────────────────────────────
   const scheduleSave = useCallback(() => {
@@ -717,6 +727,32 @@ export default function WhiteboardEditor({
     return () => window.removeEventListener('paste', onPaste)
   }, [canEdit, boardId, scheduleRender, scheduleSave]) // eslint-disable-line
 
+  // ── Sync on window focus (picks up edits made by others) ─────────────────
+  useEffect(() => {
+    const onFocus = async () => {
+      // Don't disrupt an active drawing/drag/resize
+      if (activePtsRef.current || resizeRef.current || dragRef.current) return
+      try {
+        const res  = await fetch(`/api/whiteboards/${boardId}`)
+        const data = await res.json()
+        if (data?.canvas_json) {
+          const parsed = JSON.parse(data.canvas_json)
+          elementsRef.current = parsed.elements ?? []
+          for (const el of elementsRef.current) {
+            if (el.type === 'image' && !imgCache.current.has(el.url)) {
+              const img = new Image()
+              img.src = el.url
+              imgCache.current.set(el.url, img)
+            }
+          }
+          scheduleRender()
+        }
+      } catch { /* silent — don't break anything if network fails */ }
+    }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [boardId, scheduleRender])
+
   // ── Commit text input ─────────────────────────────────────────────────────
   const commitText = useCallback(() => {
     if (!textPos || !textInput.trim()) { setTextPos(null); return }
@@ -910,6 +946,7 @@ export default function WhiteboardEditor({
             left: 0, top: 0, width: '100%', height: '100%',
           }}>
             <input
+              ref={textInputRef}
               autoFocus
               value={textInput}
               onChange={e => setTextInput(e.target.value)}
@@ -1208,11 +1245,38 @@ export default function WhiteboardEditor({
               </div>
             )}
 
-            {!isTeacher && (
-              <p className="text-sm text-center" style={{ color: 'var(--text-muted)' }}>
-                Use the &ldquo;Share with teacher&rdquo; button to share this board.
-              </p>
-            )}
+            {!isTeacher && (() => {
+              const TEACHER_EMAIL = 'morrisontestprep@gmail.com'
+              const alreadySharedWithTeacher = shares.some(
+                s => s.profiles?.email === TEACHER_EMAIL || s.profiles?.full_name?.toLowerCase().includes('teacher')
+              )
+              return (
+                <div className="flex flex-col gap-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+                    Share with teacher
+                  </p>
+                  {alreadySharedWithTeacher ? (
+                    <div className="flex items-center gap-2 px-3 py-2 rounded-xl"
+                      style={{ background: 'var(--background)' }}>
+                      <svg className="w-4 h-4 flex-shrink-0" style={{ color: '#16a34a' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                      <span className="text-sm" style={{ color: 'var(--foreground)' }}>
+                        Already shared with your teacher
+                      </span>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={async () => { await shareWithTeacher(); setShowShare(false) }}
+                      disabled={sharing}
+                      className="w-full py-2.5 rounded-xl font-medium text-white text-sm disabled:opacity-50"
+                      style={{ background: 'var(--accent)' }}>
+                      {sharing ? 'Sharing…' : 'Share with teacher (edit access)'}
+                    </button>
+                  )}
+                </div>
+              )
+            })()}
           </div>
         </div>
       )}
