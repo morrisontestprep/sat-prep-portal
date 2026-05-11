@@ -86,10 +86,12 @@ export default function Nav({ userEmail }: { userEmail?: string }) {
 
   const handleCreateWhiteboard = async () => {
     setCreatingBoard(true)
+    const newTab = window.open('', '_blank')
     const res = await fetch('/api/whiteboards', { method: 'POST' })
     const { id } = await res.json()
     setCreatingBoard(false)
-    if (id) window.open(`/whiteboards/${id}`, '_blank')
+    if (id && newTab) newTab.location.href = `/whiteboards/${id}`
+    else if (id) window.location.href = `/whiteboards/${id}`
   }
 
   const navItems = isTeacher ? teacherNav : studentNav
