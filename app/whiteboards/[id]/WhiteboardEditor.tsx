@@ -159,8 +159,10 @@ export default function WhiteboardEditor({
   const [sharing,     setSharing]     = useState(false)
   const [shareError,  setShareError]  = useState<string | null>(null)
 
-  const saveTimer    = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  const textInputRef = useRef<HTMLInputElement>(null)
+  const saveTimer      = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const textInputRef   = useRef<HTMLInputElement>(null)
+  const textClientXY   = useRef<{ x: number; y: number } | null>(null)
+  const textFocusedRef = useRef(false)
 
   // ── Load initial canvas data ───────────────────────────────────────────────
   useEffect(() => {
@@ -294,9 +296,15 @@ export default function WhiteboardEditor({
   // ── Focus text input when text tool places a pin ──────────────────────────
   useEffect(() => {
     if (textPos) {
-      // Short delay lets the input mount before we try to focus it
-      const t = setTimeout(() => textInputRef.current?.focus(), 50)
-      return () => clearTimeout(t)
+      textFocusedRef.current = false
+      // Two rAF passes guarantee the input has mounted and painted before focus
+      let raf1: number, raf2: number
+      raf1 = requestAnimationFrame(() => {
+        raf2 = requestAnimationFrame(() => {
+          textInputRef.current?.focus()
+        })
+      })
+      return () => { cancelAnimationFrame(raf1); cancelAnimationFrame(raf2) }
     }
   }, [textPos])
 
@@ -416,6 +424,7 @@ export default function WhiteboardEditor({
     }
 
     if (tool === 'text') {
+      textClientXY.current = { x: e.clientX, y: e.clientY }
       setTextPos({ wx, wy })
       setTextColor(color)
       setTextInput('')
@@ -727,10 +736,9 @@ export default function WhiteboardEditor({
     return () => window.removeEventListener('paste', onPaste)
   }, [canEdit, boardId, scheduleRender, scheduleSave]) // eslint-disable-line
 
-  // ── Sync on window focus (picks up edits made by others) ─────────────────
+  // ── Sync: pull latest canvas from server (on focus + every 15s) ──────────
   useEffect(() => {
-    const onFocus = async () => {
-      // Don't disrupt an active drawing/drag/resize
+    const pull = async () => {
       if (activePtsRef.current || resizeRef.current || dragRef.current) return
       try {
         const res  = await fetch(`/api/whiteboards/${boardId}`)
@@ -747,10 +755,14 @@ export default function WhiteboardEditor({
           }
           scheduleRender()
         }
-      } catch { /* silent — don't break anything if network fails */ }
+      } catch { /* silent */ }
     }
-    window.addEventListener('focus', onFocus)
-    return () => window.removeEventListener('focus', onFocus)
+    window.addEventListener('focus', pull)
+    const interval = setInterval(pull, 15_000)
+    return () => {
+      window.removeEventListener('focus', pull)
+      clearInterval(interval)
+    }
   }, [boardId, scheduleRender])
 
   // ── Commit text input ─────────────────────────────────────────────────────
@@ -855,9 +867,6 @@ export default function WhiteboardEditor({
   }
   const resetView = () => { viewRef.current = { tx: 0, ty: 0, scale: 1 }; scheduleRender() }
 
-  // Text overlay screen position
-  const textScreenPos = textPos ? worldToScreen(textPos.wx, textPos.wy, viewRef.current) : null
-
   // Re-render when tool/color changes
   useEffect(() => { scheduleRender() }, [tool, color, hlColor, thickness, scheduleRender])
 
@@ -940,46 +949,42 @@ export default function WhiteboardEditor({
           onPointerLeave={onPointerUp}
         />
 
-        {/* Text input overlay */}
-        {textPos && textScreenPos && (
-          <div className="absolute pointer-events-none" style={{
-            left: 0, top: 0, width: '100%', height: '100%',
-          }}>
-            <input
-              ref={textInputRef}
-              autoFocus
-              value={textInput}
-              onChange={e => setTextInput(e.target.value)}
-              onBlur={commitText}
-              onKeyDown={e => {
-                if (e.key === 'Enter')  { e.preventDefault(); commitText() }
-                if (e.key === 'Escape') { setTextPos(null); setTextInput('') }
-                // Bold / italic shortcuts
-                if ((e.metaKey || e.ctrlKey) && e.key === 'b') { e.preventDefault(); setTextBold(b => !b) }
-                if ((e.metaKey || e.ctrlKey) && e.key === 'i') { e.preventDefault(); setTextItalic(i => !i) }
-              }}
-              className="pointer-events-auto absolute"
-              style={{
-                left:       textScreenPos[0],
-                top:        textScreenPos[1] - textSize * viewRef.current.scale,
-                fontSize:   `${textSize * viewRef.current.scale}px`,
-                fontFamily: '-apple-system, sans-serif',
-                fontWeight: textBold   ? 'bold'   : 'normal',
-                fontStyle:  textItalic ? 'italic' : 'normal',
-                color:      textColor,
-                background: 'rgba(255,255,255,0.85)',
-                border:     '2px solid #3b5bdb',
-                borderRadius: 4,
-                padding:    '2px 6px',
-                outline:    'none',
-                minWidth:   100,
-                whiteSpace: 'nowrap',
-                caretColor: textColor,
-                boxShadow:  '0 2px 8px rgba(0,0,0,0.15)',
-              }}
-              placeholder="Type here…"
-            />
-          </div>
+        {/* Text input overlay — fixed so overflow:hidden can never clip it */}
+        {textPos && textClientXY.current && (
+          <input
+            ref={textInputRef}
+            value={textInput}
+            onChange={e => setTextInput(e.target.value)}
+            onFocus={() => { textFocusedRef.current = true }}
+            onBlur={() => { if (textFocusedRef.current) commitText() }}
+            onKeyDown={e => {
+              if (e.key === 'Enter')  { e.preventDefault(); commitText() }
+              if (e.key === 'Escape') { setTextPos(null); setTextInput('') }
+              if ((e.metaKey || e.ctrlKey) && e.key === 'b') { e.preventDefault(); setTextBold(b => !b) }
+              if ((e.metaKey || e.ctrlKey) && e.key === 'i') { e.preventDefault(); setTextItalic(i => !i) }
+            }}
+            style={{
+              position:   'fixed',
+              left:       textClientXY.current.x,
+              top:        textClientXY.current.y - textSize * viewRef.current.scale,
+              fontSize:   `${textSize * viewRef.current.scale}px`,
+              fontFamily: '-apple-system, sans-serif',
+              fontWeight: textBold   ? 'bold'   : 'normal',
+              fontStyle:  textItalic ? 'italic' : 'normal',
+              color:      textColor,
+              background: 'rgba(255,255,255,0.92)',
+              border:     '2px solid #3b5bdb',
+              borderRadius: 4,
+              padding:    '2px 6px',
+              outline:    'none',
+              minWidth:   120,
+              whiteSpace: 'nowrap',
+              caretColor: textColor,
+              boxShadow:  '0 2px 12px rgba(0,0,0,0.2)',
+              zIndex:     100,
+            }}
+            placeholder="Type here… (Enter to place)"
+          />
         )}
       </div>
 

@@ -70,14 +70,21 @@ export default async function StudentsPage() {
     }
 
     // Student → teacher shares (boards students created, shared with teacher)
-    const { data: s2t } = await supabase
+    // Use two separate queries to avoid circular RLS recursion
+    const { data: s2tShares } = await supabase
       .from('whiteboard_shares')
-      .select('id, whiteboards(id, name, created_by)')
+      .select('id, whiteboard_id')
       .eq('shared_with', user.id)
       .is('revoked_at', null)
 
-    for (const s of (s2t ?? []) as any[]) {
-      const board = s.whiteboards
+    const s2tBoardIds = (s2tShares ?? []).map((s: any) => s.whiteboard_id).filter(Boolean)
+    const { data: s2tBoards } = s2tBoardIds.length > 0
+      ? await supabase.from('whiteboards').select('id, name, created_by').in('id', s2tBoardIds)
+      : { data: [] as { id: string; name: string; created_by: string }[] }
+
+    const s2tBoardMap = Object.fromEntries((s2tBoards ?? []).map((b: any) => [b.id, b]))
+    for (const s of (s2tShares ?? []) as any[]) {
+      const board = s2tBoardMap[s.whiteboard_id]
       if (!board) continue
       if (!studentIds.includes(board.created_by)) continue
       if (!wbStudentBoardsForTeacher[board.created_by]) wbStudentBoardsForTeacher[board.created_by] = []
