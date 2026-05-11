@@ -73,12 +73,18 @@ export default function WhiteboardsClient({ ownBoards: initial, sharedBoards, is
 
   const createBoard = async () => {
     setCreating(true)
-    const newTab = window.open('', '_blank')
     const res = await fetch('/api/whiteboards', { method: 'POST' })
-    const { id } = await res.json()
+    const json = await res.json()
     setCreating(false)
-    if (id && newTab) newTab.location.href = `/whiteboards/${id}`
-    else if (id) window.location.href = `/whiteboards/${id}`
+    if (json.id) {
+      const a = document.createElement('a')
+      a.href = `/whiteboards/${json.id}`
+      a.target = '_blank'
+      a.rel = 'noopener noreferrer'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+    }
   }
 
   const deleteBoard = async (boardId: string) => {

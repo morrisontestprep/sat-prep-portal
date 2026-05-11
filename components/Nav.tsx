@@ -86,12 +86,18 @@ export default function Nav({ userEmail }: { userEmail?: string }) {
 
   const handleCreateWhiteboard = async () => {
     setCreatingBoard(true)
-    const newTab = window.open('', '_blank')
     const res = await fetch('/api/whiteboards', { method: 'POST' })
-    const { id } = await res.json()
+    const json = await res.json()
     setCreatingBoard(false)
-    if (id && newTab) newTab.location.href = `/whiteboards/${id}`
-    else if (id) window.location.href = `/whiteboards/${id}`
+    if (json.id) {
+      const a = document.createElement('a')
+      a.href = `/whiteboards/${json.id}`
+      a.target = '_blank'
+      a.rel = 'noopener noreferrer'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+    }
   }
 
   const navItems = isTeacher ? teacherNav : studentNav
