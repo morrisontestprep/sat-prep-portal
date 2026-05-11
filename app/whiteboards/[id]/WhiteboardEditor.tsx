@@ -99,8 +99,11 @@ function getElBounds(
 ): { x: number; y: number; w: number; h: number } {
   if (el.type === 'image') return { x: el.x, y: el.y, w: el.w, h: el.h }
   ctx.font = fontStr(el.size, el.bold, el.italic)
-  const tw = ctx.measureText(el.text).width
-  return { x: el.x - 2, y: el.y - el.size, w: tw + 4, h: el.size + 4 }
+  const lines = el.text.split('\n')
+  const maxW  = Math.max(...lines.map(l => ctx.measureText(l).width), 10)
+  const lineH = el.size * 1.3
+  const totalH = lines.length * lineH
+  return { x: el.x - 2, y: el.y - el.size, w: maxW + 4, h: totalH + 4 }
 }
 
 // ── Component ──────────────────────────────────────────────────────────────────
@@ -144,6 +147,7 @@ export default function WhiteboardEditor({
   // Text state
   const [textInput,  setTextInput]  = useState('')
   const [textPos,    setTextPos]    = useState<{ wx: number; wy: number } | null>(null)
+  const [textEditId, setTextEditId] = useState<string | null>(null)
   const [textColor,  setTextColor]  = useState(PEN_COLORS[0])
   const [textSize,   setTextSize]   = useState(18)
   const [textBold,   setTextBold]   = useState(false)
@@ -160,7 +164,7 @@ export default function WhiteboardEditor({
   const [shareError,  setShareError]  = useState<string | null>(null)
 
   const saveTimer      = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  const textInputRef   = useRef<HTMLInputElement>(null)
+  const textInputRef   = useRef<HTMLTextAreaElement>(null)
   const textClientXY   = useRef<{ x: number; y: number } | null>(null)
   const textFocusedRef = useRef(false)
 
@@ -219,10 +223,13 @@ export default function WhiteboardEditor({
         ctx.save()
         ctx.font      = fontStr(el.size, el.bold, el.italic)
         ctx.fillStyle = el.color
-        ctx.fillText(el.text, el.x, el.y)
+        const lines  = el.text.split('\n')
+        const lineH  = el.size * 1.3
+        lines.forEach((line, i) => ctx.fillText(line, el.x, el.y + i * lineH))
         if (selId === el.id) {
-          const tw = ctx.measureText(el.text).width
-          drawSelectionBox(ctx, el.x - 2, el.y - el.size, tw + 4, el.size + 4)
+          const maxW   = Math.max(...lines.map(l => ctx.measureText(l).width), 10)
+          const totalH = lines.length * lineH
+          drawSelectionBox(ctx, el.x - 2, el.y - el.size, maxW + 4, totalH + 4)
         }
         ctx.restore()
       }
@@ -315,11 +322,17 @@ export default function WhiteboardEditor({
     saveTimer.current = setTimeout(async () => {
       setSaving(true)
       const json = JSON.stringify({ version: 1, elements: elementsRef.current })
-      await fetch(`/api/whiteboards/${boardId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ canvas_json: json }),
-      })
+      try {
+        const res  = await fetch(`/api/whiteboards/${boardId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ canvas_json: json }),
+        })
+        const data = await res.json()
+        if (!res.ok) console.error('Autosave failed:', data?.error)
+      } catch (err) {
+        console.error('Autosave network error:', err)
+      }
       setSaving(false)
     }, AUTOSAVE_MS)
   }, [boardId, canEdit])
@@ -335,8 +348,10 @@ export default function WhiteboardEditor({
         if (!canvas) continue
         const ctx = canvas.getContext('2d')!
         ctx.font = fontStr(el.size, el.bold, el.italic)
-        const tw = ctx.measureText(el.text).width
-        if (wx >= el.x - 2 && wx <= el.x + tw + 2 && wy >= el.y - el.size && wy <= el.y + 4) return el
+        const lines  = el.text.split('\n')
+        const maxW   = Math.max(...lines.map(l => ctx.measureText(l).width), 10)
+        const totalH = lines.length * el.size * 1.3
+        if (wx >= el.x - 2 && wx <= el.x + maxW + 2 && wy >= el.y - el.size && wy <= el.y + totalH) return el
       }
     }
     return null
@@ -424,7 +439,22 @@ export default function WhiteboardEditor({
     }
 
     if (tool === 'text') {
+      // Check if clicking on an existing text element → re-edit it
+      const hit = hitTest(wx, wy)
+      if (hit && hit.type === 'text') {
+        textClientXY.current = { x: e.clientX, y: e.clientY }
+        setTextEditId(hit.id)
+        setTextInput(hit.text)
+        setTextColor(hit.color)
+        setTextSize(hit.size)
+        setTextBold(hit.bold ?? false)
+        setTextItalic(hit.italic ?? false)
+        setTextPos({ wx: hit.x, wy: hit.y })
+        return
+      }
+      // New text placement
       textClientXY.current = { x: e.clientX, y: e.clientY }
+      setTextEditId(null)
       setTextPos({ wx, wy })
       setTextColor(color)
       setTextInput('')
@@ -767,20 +797,33 @@ export default function WhiteboardEditor({
 
   // ── Commit text input ─────────────────────────────────────────────────────
   const commitText = useCallback(() => {
-    if (!textPos || !textInput.trim()) { setTextPos(null); return }
-    const newEl: TextEl = {
-      id: uid(), type: 'text',
-      text: textInput.trim(),
-      x: textPos.wx, y: textPos.wy,
-      color: textColor, size: textSize,
-      bold: textBold, italic: textItalic,
+    const trimmed = textInput.replace(/^\n+|\n+$/g, '') // strip leading/trailing newlines only
+    if (!textPos || !trimmed) {
+      setTextPos(null); setTextEditId(null); return
     }
-    elementsRef.current = [...elementsRef.current, newEl]
+    if (textEditId) {
+      // Update existing element in place
+      elementsRef.current = elementsRef.current.map(el =>
+        el.id === textEditId && el.type === 'text'
+          ? { ...el, text: trimmed, color: textColor, size: textSize, bold: textBold, italic: textItalic }
+          : el
+      )
+    } else {
+      const newEl: TextEl = {
+        id: uid(), type: 'text',
+        text: trimmed,
+        x: textPos.wx, y: textPos.wy,
+        color: textColor, size: textSize,
+        bold: textBold, italic: textItalic,
+      }
+      elementsRef.current = [...elementsRef.current, newEl]
+    }
     setTextPos(null)
+    setTextEditId(null)
     setTextInput('')
     scheduleRender()
     scheduleSave()
-  }, [textPos, textInput, textColor, textSize, textBold, textItalic, scheduleRender, scheduleSave])
+  }, [textPos, textInput, textEditId, textColor, textSize, textBold, textItalic, scheduleRender, scheduleSave])
 
   // ── Board name save ───────────────────────────────────────────────────────
   const saveName = useCallback(async (name: string) => {
@@ -949,17 +992,19 @@ export default function WhiteboardEditor({
           onPointerLeave={onPointerUp}
         />
 
-        {/* Text input overlay — fixed so overflow:hidden can never clip it */}
+        {/* Text textarea overlay — position:fixed so overflow:hidden never clips it */}
         {textPos && textClientXY.current && (
-          <input
+          <textarea
             ref={textInputRef}
             value={textInput}
+            rows={Math.max(1, (textInput.match(/\n/g)?.length ?? 0) + 1)}
             onChange={e => setTextInput(e.target.value)}
             onFocus={() => { textFocusedRef.current = true }}
             onBlur={() => { if (textFocusedRef.current) commitText() }}
             onKeyDown={e => {
-              if (e.key === 'Enter')  { e.preventDefault(); commitText() }
-              if (e.key === 'Escape') { setTextPos(null); setTextInput('') }
+              // Enter alone = commit; Shift+Enter = newline
+              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitText() }
+              if (e.key === 'Escape') { e.preventDefault(); setTextPos(null); setTextEditId(null); setTextInput('') }
               if ((e.metaKey || e.ctrlKey) && e.key === 'b') { e.preventDefault(); setTextBold(b => !b) }
               if ((e.metaKey || e.ctrlKey) && e.key === 'i') { e.preventDefault(); setTextItalic(i => !i) }
             }}
@@ -968,22 +1013,24 @@ export default function WhiteboardEditor({
               left:       textClientXY.current.x,
               top:        textClientXY.current.y - textSize * viewRef.current.scale,
               fontSize:   `${textSize * viewRef.current.scale}px`,
+              lineHeight: 1.3,
               fontFamily: '-apple-system, sans-serif',
               fontWeight: textBold   ? 'bold'   : 'normal',
               fontStyle:  textItalic ? 'italic' : 'normal',
               color:      textColor,
               background: 'rgba(255,255,255,0.92)',
-              border:     '2px solid #3b5bdb',
+              border:     `2px solid ${textEditId ? '#ea580c' : '#3b5bdb'}`,
               borderRadius: 4,
               padding:    '2px 6px',
               outline:    'none',
-              minWidth:   120,
-              whiteSpace: 'nowrap',
+              minWidth:   150,
+              resize:     'none',
+              overflow:   'hidden',
               caretColor: textColor,
               boxShadow:  '0 2px 12px rgba(0,0,0,0.2)',
               zIndex:     100,
             }}
-            placeholder="Type here… (Enter to place)"
+            placeholder={textEditId ? 'Edit text… (Enter to save)' : 'Type here… (Enter to place, Shift+Enter for newline)'}
           />
         )}
       </div>

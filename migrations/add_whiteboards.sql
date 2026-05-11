@@ -28,44 +28,49 @@ CREATE TABLE IF NOT EXISTS whiteboard_shares (
 ALTER TABLE whiteboards       ENABLE ROW LEVEL SECURITY;
 ALTER TABLE whiteboard_shares ENABLE ROW LEVEL SECURITY;
 
+-- SECURITY DEFINER helpers to break circular RLS recursion between
+-- whiteboards ↔ whiteboard_shares policies.
+CREATE OR REPLACE FUNCTION auth_wb_shared_ids()
+RETURNS SETOF uuid LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$
+  SELECT whiteboard_id FROM whiteboard_shares
+  WHERE shared_with = auth.uid() AND revoked_at IS NULL
+$$;
+
+CREATE OR REPLACE FUNCTION auth_wb_edit_ids()
+RETURNS SETOF uuid LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$
+  SELECT whiteboard_id FROM whiteboard_shares
+  WHERE shared_with = auth.uid() AND access_level = 'edit' AND revoked_at IS NULL
+$$;
+
+CREATE OR REPLACE FUNCTION auth_wb_owned_share_ids()
+RETURNS SETOF uuid LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$
+  SELECT id FROM whiteboards WHERE created_by = auth.uid()
+$$;
+
+-- Drop old versions in case of re-run
+DROP POLICY IF EXISTS "wb_owner_all"        ON whiteboards;
+DROP POLICY IF EXISTS "wb_shared_read"      ON whiteboards;
+DROP POLICY IF EXISTS "wb_shared_edit"      ON whiteboards;
+DROP POLICY IF EXISTS "wbs_owner_all"       ON whiteboard_shares;
+DROP POLICY IF EXISTS "wbs_recipient_select" ON whiteboard_shares;
+
 -- Owner has full access to their boards
 CREATE POLICY "wb_owner_all" ON whiteboards
   FOR ALL USING (created_by = auth.uid());
 
--- Shared user can read a board shared with them (not revoked)
+-- Shared user can read a board shared with them (uses DEFINER fn — no recursion)
 CREATE POLICY "wb_shared_read" ON whiteboards
-  FOR SELECT USING (
-    EXISTS (
-      SELECT 1 FROM whiteboard_shares
-       WHERE whiteboard_id = id
-         AND shared_with   = auth.uid()
-         AND revoked_at IS NULL
-    )
-  );
+  FOR SELECT USING (id IN (SELECT auth_wb_shared_ids()));
 
 -- Shared user with edit access can update canvas_json / name
 CREATE POLICY "wb_shared_edit" ON whiteboards
-  FOR UPDATE USING (
-    EXISTS (
-      SELECT 1 FROM whiteboard_shares
-       WHERE whiteboard_id = id
-         AND shared_with   = auth.uid()
-         AND access_level  = 'edit'
-         AND revoked_at IS NULL
-    )
-  );
+  FOR UPDATE USING (id IN (SELECT auth_wb_edit_ids()));
 
--- Owner of the whiteboard can manage its shares
+-- Owner of the whiteboard can manage its shares (uses DEFINER fn — no recursion)
 CREATE POLICY "wbs_owner_all" ON whiteboard_shares
-  FOR ALL USING (
-    EXISTS (
-      SELECT 1 FROM whiteboards
-       WHERE id         = whiteboard_id
-         AND created_by = auth.uid()
-    )
-  );
+  FOR ALL USING (whiteboard_id IN (SELECT auth_wb_owned_share_ids()));
 
--- User can read shares where they are the recipient (so they know they have access)
+-- User can read shares where they are the recipient
 CREATE POLICY "wbs_recipient_select" ON whiteboard_shares
   FOR SELECT USING (shared_with = auth.uid());
 
