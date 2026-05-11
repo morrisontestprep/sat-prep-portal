@@ -21,9 +21,12 @@ export default async function StudentsPage() {
     .select(`
       id,
       student_id,
+      worksheet_id,
+      attempt_number,
       assigned_at,
       due_date,
       status,
+      completed_at,
       worksheets ( id, title )
     `)
     .order('assigned_at', { ascending: false })
@@ -46,9 +49,12 @@ export default async function StudentsPage() {
   type Assignment = {
     id: string
     student_id: string
+    worksheet_id: string | null
+    attempt_number: number | null
     assigned_at: string
     due_date: string | null
     status: string
+    completed_at: string | null
     worksheets: { id: string; title: string } | null
   }
 

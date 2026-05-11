@@ -8,9 +8,12 @@ import MasterFileModal from '@/components/MasterFileModal'
 type Assignment = {
   id: string
   student_id: string
+  worksheet_id: string | null
+  attempt_number: number | null
   assigned_at: string
   due_date: string | null
   status: string
+  completed_at: string | null
   worksheets: { id: string; title: string } | null
 }
 
@@ -35,10 +38,68 @@ type Props = {
   sharesByStudent: Record<string, string[]>
 }
 
+// Group assignments by worksheet so redos collapse into one row
+type GroupedAssignment = {
+  worksheetId: string | null
+  worksheet: { id: string; title: string } | null
+  // First assignment = original (for assigned date + due date editing)
+  firstAssignment: Assignment
+  // All assignments in order (earliest first)
+  all: Assignment[]
+  // Convenience
+  completedRows: { completedAt: string | null }[]  // one entry per completed attempt
+  hasPending: boolean
+  currentDueDate: string | null  // from first/most-relevant assignment
+}
+
+function groupAssignments(assignments: Assignment[]): GroupedAssignment[] {
+  const map = new Map<string, Assignment[]>()
+  for (const a of assignments) {
+    const key = a.worksheet_id ?? a.id  // fallback to id if no worksheet
+    if (!map.has(key)) map.set(key, [])
+    map.get(key)!.push(a)
+  }
+
+  return Array.from(map.entries()).map(([, rows]) => {
+    // Sort by assigned_at ascending (original first)
+    const sorted = [...rows].sort(
+      (a, b) => new Date(a.assigned_at).getTime() - new Date(b.assigned_at).getTime()
+    )
+    const first = sorted[0]
+    const completedRows = sorted
+      .filter(r => r.status === 'complete')
+      .map(r => ({ completedAt: r.completed_at }))
+    const hasPending = sorted.some(r => r.status === 'pending')
+
+    return {
+      worksheetId: first.worksheet_id,
+      worksheet: first.worksheets,
+      firstAssignment: first,
+      all: sorted,
+      completedRows,
+      hasPending,
+      currentDueDate: first.due_date,
+    }
+  })
+  // Sort groups by most recent assigned_at descending
+  .sort(
+    (a, b) =>
+      new Date(b.firstAssignment.assigned_at).getTime() -
+      new Date(a.firstAssignment.assigned_at).getTime()
+  )
+}
+
 const SUBJECT_COLORS: Record<string, { bg: string; color: string }> = {
   'Math':             { bg: '#ede9fe', color: '#7c3aed' },
   'English':          { bg: '#dbeafe', color: '#1d4ed8' },
   'General Strategy': { bg: '#dcfce7', color: '#16a34a' },
+}
+
+function fmt(iso: string) {
+  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+function fmtWithYear(iso: string) {
+  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
 function StudentCard({
@@ -60,11 +121,18 @@ function StudentCard({
   const [togglingId, setTogglingId]       = useState<string | null>(null)
   const [notifyOnShare, setNotifyOnShare] = useState(true)
 
+  // Due date editing
+  const [editingDueDateId, setEditingDueDateId] = useState<string | null>(null)
+  const [dueDateInput, setDueDateInput]         = useState('')
+  const [savingDueDate, setSavingDueDate]       = useState(false)
+  // Local overrides for due dates (assignmentId -> date string)
+  const [dueDateOverrides, setDueDateOverrides] = useState<Record<string, string | null>>({})
+
+  const grouped = groupAssignments(assignments)
+
   const completedCount = assignments.filter(a => a.status === 'complete').length
   const pendingCount   = assignments.filter(a => a.status === 'pending').length
-  const joinedDate = new Date(student.created_at).toLocaleDateString('en-US', {
-    month: 'short', day: 'numeric', year: 'numeric',
-  })
+  const joinedDate = fmtWithYear(student.created_at)
 
   const handleDelete = async () => {
     setDeleting(true)
@@ -105,6 +173,41 @@ function StudentCard({
       }
     }
     setTogglingId(null)
+  }
+
+  const startEditDueDate = (assignmentId: string, currentDue: string | null, e: React.MouseEvent) => {
+    e.stopPropagation()
+    setEditingDueDateId(assignmentId)
+    // Pre-fill with existing date in YYYY-MM-DD format for the input
+    setDueDateInput(currentDue ? currentDue.slice(0, 10) : '')
+  }
+
+  const saveDueDate = async (assignmentId: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    setSavingDueDate(true)
+    const newDueDate = dueDateInput ? dueDateInput : null
+    const res = await fetch('/api/students', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        assignmentId,
+        dueDate: newDueDate,
+        studentEmail: student.email,
+        studentName: student.full_name || student.email,
+      }),
+    })
+    setSavingDueDate(false)
+    if (!res.ok) {
+      alert('Failed to update due date. Please try again.')
+      return
+    }
+    setDueDateOverrides(prev => ({ ...prev, [assignmentId]: newDueDate }))
+    setEditingDueDateId(null)
+  }
+
+  const cancelEditDueDate = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    setEditingDueDateId(null)
   }
 
   const sharedCount = allGuides.filter(g => sharedIds.has(g.id)).length
@@ -275,7 +378,7 @@ function StudentCard({
       )}
 
       {/* Collapsible assignments list */}
-      {expanded && assignments.length > 0 && (
+      {expanded && grouped.length > 0 && (
         <div className="border-t" style={{ borderColor: 'var(--border)' }}>
           <table className="w-full text-sm">
             <thead>
@@ -287,34 +390,128 @@ function StudentCard({
               </tr>
             </thead>
             <tbody>
-              {assignments.map((a, i) => {
-                const ws = a.worksheets as { id: string; title: string } | null
+              {grouped.map((g, i) => {
+                const aid = g.firstAssignment.id
+                const isEditing = editingDueDateId === aid
+                // Use local override if available, otherwise original
+                const effectiveDueDate = aid in dueDateOverrides
+                  ? dueDateOverrides[aid]
+                  : g.currentDueDate
+
                 return (
-                  <tr key={a.id} className={i < assignments.length - 1 ? 'border-b' : ''} style={{ borderColor: 'var(--border)' }}>
+                  <tr key={aid} className={i < grouped.length - 1 ? 'border-b' : ''} style={{ borderColor: 'var(--border)' }}>
+                    {/* Worksheet */}
                     <td className="px-6 py-2.5">
-                      {ws ? (
-                        <Link href={`/worksheets/${ws.id}`} className="hover:underline truncate block max-w-xs"
+                      {g.worksheet ? (
+                        <Link href={`/worksheets/${g.worksheet.id}`} className="hover:underline truncate block max-w-xs"
                           style={{ color: 'var(--accent)' }} onClick={e => e.stopPropagation()}>
-                          {ws.title}
+                          {g.worksheet.title}
                         </Link>
                       ) : (
                         <span style={{ color: 'var(--text-muted)' }}>Deleted worksheet</span>
                       )}
                     </td>
-                    <td className="px-4 py-2.5" style={{ color: 'var(--text-muted)' }}>
-                      {new Date(a.assigned_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+
+                    {/* Assigned */}
+                    <td className="px-4 py-2.5 whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>
+                      {fmt(g.firstAssignment.assigned_at)}
                     </td>
-                    <td className="px-4 py-2.5" style={{ color: 'var(--text-muted)' }}>
-                      {a.due_date ? new Date(a.due_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}
+
+                    {/* Due — editable */}
+                    <td className="px-4 py-2.5 whitespace-nowrap">
+                      {isEditing ? (
+                        <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
+                          <input
+                            type="date"
+                            value={dueDateInput}
+                            onChange={e => setDueDateInput(e.target.value)}
+                            className="text-xs rounded-md px-2 py-1 border"
+                            style={{
+                              borderColor: 'var(--border)',
+                              background: 'var(--background)',
+                              color: 'var(--foreground)',
+                              outline: 'none',
+                            }}
+                            autoFocus
+                          />
+                          <button
+                            onClick={e => saveDueDate(aid, e)}
+                            disabled={savingDueDate}
+                            className="text-xs px-2 py-1 rounded-md font-medium disabled:opacity-50"
+                            style={{ background: 'var(--accent)', color: '#fff' }}
+                          >
+                            {savingDueDate ? '…' : 'Save'}
+                          </button>
+                          <button
+                            onClick={cancelEditDueDate}
+                            className="text-xs px-2 py-1 rounded-md"
+                            style={{ color: 'var(--text-muted)', background: 'var(--background)', border: '1px solid var(--border)' }}
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ) : effectiveDueDate ? (
+                        <div className="flex items-center gap-1 group/due">
+                          <span style={{ color: 'var(--text-muted)' }}>
+                            {fmt(effectiveDueDate)}
+                          </span>
+                          <button
+                            onClick={e => startEditDueDate(aid, effectiveDueDate, e)}
+                            title="Edit due date"
+                            className="opacity-0 group-hover/due:opacity-100 transition-opacity w-5 h-5 rounded flex items-center justify-center"
+                            style={{ color: 'var(--text-muted)' }}
+                          >
+                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                            </svg>
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={e => startEditDueDate(aid, null, e)}
+                          className="text-xs px-2 py-0.5 rounded-md border transition-colors"
+                          style={{
+                            borderColor: 'var(--border)',
+                            color: 'var(--accent)',
+                            background: 'var(--background)',
+                          }}
+                          title="Set due date"
+                        >
+                          + Set date
+                        </button>
+                      )}
                     </td>
+
+                    {/* Status + completion dates */}
                     <td className="px-4 py-2.5">
-                      <span className="text-xs px-2 py-0.5 rounded-full"
-                        style={{
-                          background: a.status === 'complete' ? '#f0fdf4' : '#fffbeb',
-                          color: a.status === 'complete' ? '#16a34a' : '#d97706',
-                        }}>
-                        {a.status === 'complete' ? 'Complete' : 'Pending'}
-                      </span>
+                      <div className="flex flex-col gap-1">
+                        {/* Completed attempts — show date if available, just badge if not */}
+                        {g.completedRows.map((r, idx) => (
+                          <div key={idx} className="flex items-center gap-1.5">
+                            <span className="text-xs px-2 py-0.5 rounded-full whitespace-nowrap"
+                              style={{ background: '#f0fdf4', color: '#16a34a' }}>
+                              Complete
+                            </span>
+                            {r.completedAt && (
+                              <span className="text-xs whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>
+                                {fmt(r.completedAt)}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                        {/* Pending */}
+                        {g.hasPending && (
+                          <span className="text-xs px-2 py-0.5 rounded-full self-start whitespace-nowrap"
+                            style={{ background: '#fffbeb', color: '#d97706' }}>
+                            Pending
+                          </span>
+                        )}
+                        {/* Fallback */}
+                        {g.completedRows.length === 0 && !g.hasPending && (
+                          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>—</span>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 )

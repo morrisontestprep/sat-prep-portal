@@ -1,6 +1,7 @@
 import { createClient } from '@/utils/supabase/server'
 import { NextResponse } from 'next/server'
 import { isFreeResponse, checkFreeResponse } from '@/utils/grading'
+import { notifyTeacher } from '@/utils/teacherNotify'
 
 // POST /api/sat-rush/answer
 // Body: { gameId, questionId, questionOrder, selectedAnswer, timeTakenSeconds, timePerQuestion, currentStreak }
@@ -85,6 +86,23 @@ export async function POST(request: Request) {
       current_position:     (game.current_position ?? 0) + 1,
     })
     .eq('id', gameId)
+  }
+
+  // ── Notify teacher on the first answer of each game ──────────────────────
+  // This fires immediately when a student starts playing, even if they never
+  // finish, so you always see the activity.
+  if (questionOrder === 0) {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('full_name, email')
+      .eq('id', user.id)
+      .single()
+
+    notifyTeacher('sat_rush_started', {
+      studentName:  profile?.full_name ?? '',
+      studentEmail: profile?.email ?? user.email ?? '',
+      studentId:    user.id,
+    }).catch(console.error)
   }
 
   return NextResponse.json({

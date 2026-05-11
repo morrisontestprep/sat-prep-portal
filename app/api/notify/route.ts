@@ -9,6 +9,7 @@ import {
   sendNewGuideNotification,
   sendGuideSharedNotification,
 } from '@/utils/email'
+import { notifyTeacher } from '@/utils/teacherNotify'
 
 export async function POST(request: Request) {
   try {
@@ -28,7 +29,7 @@ export async function POST(request: Request) {
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     if (type === 'submission') {
-      const { worksheetTitle, correctCount, totalQuestions, worksheetId } = body
+      const { worksheetTitle, correctCount, totalQuestions, worksheetId, assignmentId } = body
 
       // Get student profile
       const { data: profile } = await supabase
@@ -37,14 +38,27 @@ export async function POST(request: Request) {
         .eq('id', user.id)
         .single()
 
-      await sendWorksheetSubmissionNotification(
-        profile?.full_name ?? '',
-        profile?.email ?? user.email ?? '',
-        worksheetTitle,
-        correctCount,
-        totalQuestions,
-        worksheetId,
-      )
+      const pct = totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 0
+
+      await Promise.all([
+        sendWorksheetSubmissionNotification(
+          profile?.full_name ?? '',
+          profile?.email ?? user.email ?? '',
+          worksheetTitle,
+          correctCount,
+          totalQuestions,
+          worksheetId,
+        ),
+        notifyTeacher('assignment_submitted', {
+          studentName:    profile?.full_name ?? '',
+          studentEmail:   profile?.email ?? user.email ?? '',
+          studentId:      user.id,
+          worksheetTitle,
+          worksheetId,
+          assignmentId:   assignmentId ?? '',
+          score:          `${correctCount}/${totalQuestions} (${pct}%)`,
+        }),
+      ])
       return NextResponse.json({ ok: true })
     }
 

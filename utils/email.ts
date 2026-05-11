@@ -240,3 +240,41 @@ export async function sendWorksheetAssignedNotification(
     `,
   })
 }
+
+// ── Notify student: due date set or updated ───────────────────────────────────
+export async function sendDueDateUpdatedNotification(
+  studentEmail: string,
+  studentName: string,
+  worksheetTitle: string,
+  dueDate: string,          // pre-formatted, e.g. "May 15, 2026"
+  assignmentId: string,
+) {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://sat-prep-portal.vercel.app'
+  await transporter.sendMail({
+    from: `"Morrison Test Prep" <${TEACHER_EMAIL}>`,
+    to: studentEmail,
+    subject: `Due date set for "${worksheetTitle}": ${dueDate}`,
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto">
+        <h2 style="color:#4f46e5">Due Date Updated</h2>
+        <p>Hi ${studentName || 'there'},</p>
+        <p>Your tutor has set a due date for your worksheet.</p>
+        <table style="border-collapse:collapse;width:100%;margin:16px 0">
+          <tr>
+            <td style="padding:8px 0;color:#6b7280;font-size:14px">Worksheet</td>
+            <td style="padding:8px 0;font-size:14px;font-weight:600">${worksheetTitle}</td>
+          </tr>
+          <tr>
+            <td style="padding:8px 0;color:#6b7280;font-size:14px">Due</td>
+            <td style="padding:8px 0;font-size:14px;font-weight:600;color:#d97706">${dueDate}</td>
+          </tr>
+        </table>
+        <a href="${appUrl}/take/${assignmentId}"
+          style="display:inline-block;background:#4f46e5;color:white;padding:10px 20px;border-radius:8px;text-decoration:none;font-size:14px">
+          Open Worksheet
+        </a>
+        <p style="color:#9ca3af;font-size:12px;margin-top:24px">Morrison Test Prep &middot; <a href="${appUrl}" style="color:#9ca3af">${appUrl}</a></p>
+      </div>
+    `,
+  })
+}

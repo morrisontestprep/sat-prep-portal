@@ -158,6 +158,11 @@ export default function SatRushClient() {
   const totalTimerRef                           = useRef<ReturnType<typeof setInterval> | null>(null)
   const questionTimerRef                        = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  // Stable refs so the resume effect can call the latest timer functions
+  const startTotalTimerRef   = useRef<((duration: number, gId: string) => void) | null>(null)
+  const startQuestionTimerRef = useRef<(() => void) | null>(null)
+  const resumeChecked        = useRef(false)
+
   // ─── Load history on mount ─────────────────────────────────────────────────
   useEffect(() => {
     fetch('/api/sat-rush/history')
@@ -282,6 +287,48 @@ export default function SatRushClient() {
       })
     }, 100)
   }, [endGame])
+
+  // Keep stable refs up-to-date
+  useEffect(() => { startTotalTimerRef.current   = startTotalTimer   }, [startTotalTimer])
+  useEffect(() => { startQuestionTimerRef.current = startQuestionTimer }, [startQuestionTimer])
+
+  // ─── Resume on mount — restore an active game after page refresh ───────────
+  useEffect(() => {
+    if (resumeChecked.current) return
+    resumeChecked.current = true
+
+    fetch('/api/sat-rush/resume')
+      .then(r => r.json())
+      .then(d => {
+        if (!d.game) return  // no active game, stay on setup
+        const g = d.game
+
+        // Restore all game state
+        setGameId(g.id)
+        setSettings(g.settings)
+        setQuestions(g.questions)
+        setCurrentIdx(g.currentIdx)
+        setAnswers(g.answers ?? [])
+        setLivesLeft(g.livesLeft)
+        setStreak(g.streak)
+        setTotalScore(g.totalScore)
+        setSelectedAnswer('')
+        setFreeAnswer('')
+        setFeedback(null)
+        setGameEnded(false)
+        setEndReason('')
+        setPhase('game')
+
+        // Start timers with the remaining time
+        // Use a short delay so React has finished the state updates above
+        setTimeout(() => {
+          startTotalTimerRef.current?.(g.timeRemaining, g.id)
+          startQuestionTimerRef.current?.()
+        }, 50)
+      })
+      .catch(() => { /* silently ignore — user stays on setup */ })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])  // intentionally empty — runs once on mount
 
   useEffect(() => () => stopTimers(), [stopTimers])
 
@@ -462,6 +509,7 @@ export default function SatRushClient() {
     isPaused={isPaused}
     onPause={pauseTimers}
     onResume={() => resumeTimers(gameId)}
+    onEndGame={() => endGame('manual', gameId)}
   />
 
   if (phase === 'results') return <ResultsScreen
@@ -771,7 +819,7 @@ function GameScreen({
   totalScore, totalTimeLeft, questionTimeLeft, timePerQuestion,
   selectedAnswer, setSelectedAnswer, freeAnswer, setFreeAnswer,
   feedback, submitting, gameEnded, onSubmit,
-  isPaused, onPause, onResume,
+  isPaused, onPause, onResume, onEndGame,
 }: {
   questions: Question[]
   currentIdx: number
@@ -793,6 +841,7 @@ function GameScreen({
   isPaused: boolean
   onPause: () => void
   onResume: () => void
+  onEndGame: () => void
 }) {
   const q = questions[currentIdx]
   if (!q) return null
@@ -849,27 +898,37 @@ function GameScreen({
             ))}
           </div>
 
-          {/* Pause / Resume */}
+          {/* Pause / Resume + End Game */}
           {!gameEnded && (
-            <button
-              onClick={() => isPaused ? onResume() : onPause()}
-              className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 transition-colors"
-              title={isPaused ? 'Resume' : 'Pause'}
-              style={{
-                background: isPaused ? '#16a34a' : 'var(--border)',
-                color:      isPaused ? 'white'   : 'var(--text-muted)',
-              }}>
-              {isPaused ? (
-                <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-                  <polygon points="5,3 19,12 5,21" />
-                </svg>
-              ) : (
-                <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-                  <rect x="6" y="4" width="4" height="16" rx="1" />
-                  <rect x="14" y="4" width="4" height="16" rx="1" />
-                </svg>
-              )}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => isPaused ? onResume() : onPause()}
+                className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 transition-colors"
+                title={isPaused ? 'Resume' : 'Pause'}
+                style={{
+                  background: isPaused ? '#16a34a' : 'var(--border)',
+                  color:      isPaused ? 'white'   : 'var(--text-muted)',
+                }}>
+                {isPaused ? (
+                  <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                    <polygon points="5,3 19,12 5,21" />
+                  </svg>
+                ) : (
+                  <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                    <rect x="6" y="4" width="4" height="16" rx="1" />
+                    <rect x="14" y="4" width="4" height="16" rx="1" />
+                  </svg>
+                )}
+              </button>
+              <button
+                onClick={onEndGame}
+                className="text-xs px-2.5 py-1 rounded-lg font-medium flex-shrink-0 transition-colors"
+                title="End game and see results"
+                style={{ background: '#fef2f2', color: '#ef4444' }}
+              >
+                End Game
+              </button>
+            </div>
           )}
 
           {/* Score + streak */}
