@@ -75,29 +75,12 @@ export default function Nav({ userEmail }: { userEmail?: string }) {
   const router = useRouter()
   const supabase = createClient()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
-  const [creatingBoard, setCreatingBoard]   = useState(false)
 
   const isTeacher = userEmail === TEACHER_EMAIL
 
   const handleSignOut = async () => {
     await supabase.auth.signOut()
     router.push('/login')
-  }
-
-  const handleCreateWhiteboard = async () => {
-    setCreatingBoard(true)
-    const res = await fetch('/api/whiteboards', { method: 'POST' })
-    const json = await res.json()
-    setCreatingBoard(false)
-    if (json.id) {
-      const a = document.createElement('a')
-      a.href = `/whiteboards/${json.id}`
-      a.target = '_blank'
-      a.rel = 'noopener noreferrer'
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-    }
   }
 
   const navItems = isTeacher ? teacherNav : studentNav
@@ -147,17 +130,18 @@ export default function Nav({ userEmail }: { userEmail?: string }) {
 
           {/* Teacher: Create Whiteboard button (desktop) */}
           {isTeacher && (
-            <button
-              onClick={handleCreateWhiteboard}
-              disabled={creatingBoard}
-              className="hidden sm:flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium text-white disabled:opacity-60"
+            <Link
+              href="/whiteboards/new"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hidden sm:flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium text-white"
               style={{ background: 'var(--accent)' }}>
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                   d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
               </svg>
-              {creatingBoard ? '…' : '+ Whiteboard'}
-            </button>
+              + Whiteboard
+            </Link>
           )}
 
           {/* Desktop: email + sign out */}
@@ -215,17 +199,19 @@ export default function Nav({ userEmail }: { userEmail?: string }) {
               )
             })}
             {isTeacher && (
-              <button
-                onClick={() => { setMobileMenuOpen(false); handleCreateWhiteboard() }}
-                disabled={creatingBoard}
-                className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium w-full text-left"
+              <Link
+                href="/whiteboards/new"
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => setMobileMenuOpen(false)}
+                className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium w-full"
                 style={{ color: 'var(--accent)' }}>
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                     d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
                 </svg>
-                {creatingBoard ? 'Creating…' : '+ Create Whiteboard'}
-              </button>
+                + Create Whiteboard
+              </Link>
             )}
           </div>
           <div className="mt-3 pt-3 border-t flex items-center justify-between" style={{ borderColor: 'var(--border)' }}>

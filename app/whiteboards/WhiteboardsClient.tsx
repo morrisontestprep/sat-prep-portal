@@ -69,23 +69,6 @@ function BoardCard({ board, badge, onDelete }: {
 
 export default function WhiteboardsClient({ ownBoards: initial, sharedBoards, isTeacher }: Props) {
   const [ownBoards, setOwnBoards] = useState<OwnBoard[]>(initial)
-  const [creating, setCreating]   = useState(false)
-
-  const createBoard = async () => {
-    setCreating(true)
-    const res = await fetch('/api/whiteboards', { method: 'POST' })
-    const json = await res.json()
-    setCreating(false)
-    if (json.id) {
-      const a = document.createElement('a')
-      a.href = `/whiteboards/${json.id}`
-      a.target = '_blank'
-      a.rel = 'noopener noreferrer'
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-    }
-  }
 
   const deleteBoard = async (boardId: string) => {
     if (!confirm('Delete this board? This cannot be undone.')) return
@@ -102,11 +85,11 @@ export default function WhiteboardsClient({ ownBoards: initial, sharedBoards, is
           <h2 className="text-sm font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
             {isTeacher ? 'My Boards' : 'My Private Boards'}
           </h2>
-          <button onClick={createBoard} disabled={creating}
-            className="text-xs px-3 py-1.5 rounded-lg font-medium text-white disabled:opacity-60"
+          <Link href="/whiteboards/new" target="_blank" rel="noopener noreferrer"
+            className="text-xs px-3 py-1.5 rounded-lg font-medium text-white"
             style={{ background: 'var(--accent)' }}>
-            {creating ? 'Creating…' : '+ New Board'}
-          </button>
+            + New Board
+          </Link>
         </div>
 
         {ownBoards.length === 0 ? (
@@ -116,11 +99,11 @@ export default function WhiteboardsClient({ ownBoards: initial, sharedBoards, is
             <p className="text-xs mt-1 mb-4" style={{ color: 'var(--text-muted)' }}>
               Create a board and start drawing
             </p>
-            <button onClick={createBoard} disabled={creating}
+            <Link href="/whiteboards/new" target="_blank" rel="noopener noreferrer"
               className="text-sm px-4 py-2 rounded-xl font-medium text-white"
               style={{ background: 'var(--accent)' }}>
-              {creating ? 'Creating…' : '+ New Board'}
-            </button>
+              + New Board
+            </Link>
           </div>
         ) : (
           <div className="space-y-3">
