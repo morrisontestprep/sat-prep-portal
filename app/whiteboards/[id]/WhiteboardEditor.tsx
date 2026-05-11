@@ -133,7 +133,7 @@ export default function WhiteboardEditor({
   const [shareAccess,  setShareAccess] = useState<'view'|'edit'>('view')
   const [sharing,      setSharing]     = useState(false)
 
-  const saveTimer = useRef<ReturnType<typeof setTimeout>>()
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   // ── Load initial canvas data ───────────────────────────────────────────────
   useEffect(() => {
