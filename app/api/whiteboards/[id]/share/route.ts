@@ -12,14 +12,30 @@ export async function GET(_req: Request, { params }: Ctx) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { data, error } = await supabase
+  const { data: sharesRaw, error } = await supabase
     .from('whiteboard_shares')
-    .select('id, shared_with, access_level, created_at, profiles(full_name, email)')
+    .select('id, shared_with, access_level, created_at')
     .eq('whiteboard_id', id)
     .is('revoked_at', null)
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json(data ?? [])
+  if (!sharesRaw?.length) return NextResponse.json([])
+
+  // Fetch profile info separately (shared_with → auth.users → profiles)
+  const userIds = sharesRaw.map(s => s.shared_with)
+  const { data: profiles } = await supabase
+    .from('profiles')
+    .select('id, full_name, email')
+    .in('id', userIds)
+
+  const profileMap = Object.fromEntries((profiles ?? []).map(p => [p.id, p]))
+
+  const result = sharesRaw.map(s => ({
+    ...s,
+    profiles: profileMap[s.shared_with] ?? null,
+  }))
+
+  return NextResponse.json(result)
 }
 
 // POST /api/whiteboards/[id]/share — create or restore shares
