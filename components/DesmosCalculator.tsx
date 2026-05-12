@@ -23,7 +23,9 @@ const MIN_W = 320
 const MIN_H = 280
 const DEFAULT_W = 520
 const DEFAULT_H = 580
-const PANEL_W = 'clamp(360px, 42vw, 580px)'
+const PANEL_DEFAULT_W = 480
+const PANEL_MIN_W     = 340
+const PANEL_MAX_W     = 860
 
 const DIR_CURSOR: Record<ResizeDir, string> = {
   n: 'ns-resize', s: 'ns-resize',
@@ -37,9 +39,11 @@ type Props = {
   variant?: 'float' | 'panel'
   /** Called whenever the calculator opens or closes (panel mode only). */
   onOpenChange?: (open: boolean) => void
+  /** Called when the panel width changes (panel mode only, in px). */
+  onWidthChange?: (width: number) => void
 }
 
-export default function DesmosCalculator({ variant = 'float', onOpenChange }: Props) {
+export default function DesmosCalculator({ variant = 'float', onOpenChange, onWidthChange }: Props) {
   const [open, setOpen]           = useState(false)
   const [scriptLoaded, setScriptLoaded] = useState(false)
   const [mode, setMode]           = useState<'graphing' | 'scientific'>('graphing')
@@ -52,9 +56,16 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange }: Pr
   const sizeRef = useRef(size)
   const posInitialized = useRef(false)
 
-  const containerRef = useRef<HTMLDivElement>(null)
-  const instanceRef  = useRef<DesmosInstance | null>(null)
-  const panelRef     = useRef<HTMLDivElement>(null)
+  // panel-mode width (draggable)
+  const [panelWidth, setPanelWidth]   = useState(PANEL_DEFAULT_W)
+  const panelWidthRef                 = useRef(PANEL_DEFAULT_W)
+  const panelDragging                 = useRef(false)
+  const panelDragOrigin               = useRef({ mx: 0, startW: 0 })
+
+  const containerRef  = useRef<HTMLDivElement>(null)
+  const instanceRef   = useRef<DesmosInstance | null>(null)
+  const panelRef      = useRef<HTMLDivElement>(null)   // float mode
+  const panelModeRef  = useRef<HTMLDivElement>(null)   // panel mode
 
   // Drag / resize refs (float mode)
   const dragging     = useRef(false)
@@ -148,6 +159,42 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange }: Pr
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
   }, [isPanel])
 
+  // ── Panel: left-edge drag-to-resize ─────────────────────────────────────
+  useEffect(() => {
+    if (!isPanel) return
+    const onMove = (e: MouseEvent) => {
+      if (!panelDragging.current) return
+      const dx = panelDragOrigin.current.mx - e.clientX   // drag left → wider
+      const newW = Math.max(PANEL_MIN_W, Math.min(PANEL_MAX_W, panelDragOrigin.current.startW + dx))
+      panelWidthRef.current = newW
+      if (panelModeRef.current) panelModeRef.current.style.width = `${newW}px`
+      instanceRef.current?.resize()
+      onWidthChange?.(newW)
+    }
+    const onUp = () => {
+      if (panelDragging.current) {
+        panelDragging.current = false
+        setPanelWidth(panelWidthRef.current)
+        document.body.style.userSelect = ''
+        document.body.style.cursor = ''
+      }
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [isPanel, onWidthChange])
+
+  const onPanelResizeStart = useCallback((e: React.MouseEvent) => {
+    panelDragging.current = true
+    panelDragOrigin.current = { mx: e.clientX, startW: panelWidthRef.current }
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'ew-resize'
+    e.preventDefault()
+  }, [])
+
   const onDragStart = useCallback((e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest('button')) return
     dragging.current = true
@@ -188,12 +235,17 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange }: Pr
 
   useEffect(() => { if (open) instanceRef.current?.resize() }, [size, open])
 
-  // ── Panel mode resize (notify Desmos when window changes) ────────────────
+  // ── Panel mode: resize Desmos after slide-in animation + on window resize ─
   useEffect(() => {
     if (!isPanel || !open) return
+    // Delay matches the 0.2s CSS transition — ensures Desmos measures full width
+    const t = setTimeout(() => instanceRef.current?.resize(), 220)
     const onResize = () => instanceRef.current?.resize()
     window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
+    return () => {
+      clearTimeout(t)
+      window.removeEventListener('resize', onResize)
+    }
   }, [isPanel, open])
 
   // Shared header content
@@ -237,10 +289,9 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange }: Pr
       title={open ? 'Close calculator' : 'Open Desmos calculator'}
       className="fixed bottom-6 z-50 w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-transform hover:scale-110"
       style={{
-        right: 24,
+        right: isPanel && open ? panelWidth + 12 : 24,
         background: open ? '#374151' : 'var(--accent)',
         color: 'white',
-        // In panel mode when open, shift the button left so it's outside the panel
         transition: 'right 0.2s ease, background 0.15s',
       }}
     >
@@ -271,18 +322,30 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange }: Pr
       {/* ── PANEL MODE ──────────────────────────────────────────────────────── */}
       {isPanel && (
         <div
+          ref={panelModeRef}
           className="fixed z-40 flex flex-col border-l"
           style={{
             right: 0,
             top: 0,
             bottom: 0,
-            width: PANEL_W,
+            width: panelWidth,
             transform: open ? 'translateX(0)' : 'translateX(100%)',
             transition: 'transform 0.2s ease',
             background: 'var(--card)',
             borderColor: 'var(--border)',
           }}
         >
+          {/* Left-edge drag handle */}
+          <div
+            onMouseDown={onPanelResizeStart}
+            title="Drag to resize"
+            style={{
+              position: 'absolute', left: -4, top: 0, bottom: 0, width: 8,
+              cursor: 'ew-resize', zIndex: 50,
+              background: 'transparent',
+            }}
+          />
+
           <Header onClose={() => setOpen(false)} />
           <div ref={containerRef} className="flex-1 w-full" style={{ minHeight: 0 }} />
           {!scriptLoaded && (
