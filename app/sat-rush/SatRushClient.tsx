@@ -843,6 +843,8 @@ function GameScreen({
   onResume: () => void
   onEndGame: () => void
 }) {
+  const [calcOpen, setCalcOpen] = useState(false)
+
   const q = questions[currentIdx]
   if (!q) return null
 
@@ -853,7 +855,7 @@ function GameScreen({
   const tTimerYellow = totalTimeLeft < 120 // last 2 min
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden" style={{ background: 'var(--background)' }}>
+    <div className="flex-1 flex flex-col overflow-hidden" style={{ background: 'var(--background)', paddingRight: calcOpen ? 'clamp(360px, 42vw, 580px)' : 0, transition: 'padding-right 0.2s ease' }}>
 
       {/* ── Top bar ─────────────────────────────────────────────────────────── */}
       <div className="border-b px-4 py-3 flex-shrink-0"
@@ -1118,8 +1120,8 @@ function GameScreen({
         </div>
       </div>
 
-      {/* Floating tools: calculator + formulas (math questions only) */}
-      <DesmosCalculator />
+      {/* Tools: calculator panel + formulas (math questions only) */}
+      <DesmosCalculator variant="panel" onOpenChange={setCalcOpen} />
       {questions[currentIdx]?.subject === 'math' && <FormulasButton hasCalculator />}
     </div>
   )

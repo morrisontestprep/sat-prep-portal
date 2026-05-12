@@ -113,6 +113,31 @@ export default async function StudentsPage() {
     assignmentsByStudent[a.student_id].push(a)
   }
 
+  // Fetch per-assignment score + time from student_answers
+  const completedAssignmentIds = (allAssignments ?? [])
+    .filter((a: any) => a.status === 'complete')
+    .map((a: any) => a.id)
+
+  type AssignmentStat = { correct: number; total: number; seconds: number }
+  const assignmentStats: Record<string, AssignmentStat> = {}
+
+  if (completedAssignmentIds.length > 0) {
+    const { data: answerRows } = await supabase
+      .from('student_answers')
+      .select('assignment_id, is_correct, time_spent_seconds')
+      .in('assignment_id', completedAssignmentIds)
+
+    for (const row of (answerRows ?? []) as { assignment_id: string; is_correct: boolean | null; time_spent_seconds: number | null }[]) {
+      if (!assignmentStats[row.assignment_id]) {
+        assignmentStats[row.assignment_id] = { correct: 0, total: 0, seconds: 0 }
+      }
+      const s = assignmentStats[row.assignment_id]
+      s.total += 1
+      if (row.is_correct) s.correct += 1
+      s.seconds += Math.round(row.time_spent_seconds ?? 0)
+    }
+  }
+
   // Build sharesByStudent: { studentId: guideId[] }
   const sharesByStudent: Record<string, string[]> = {}
   for (const s of (allShares ?? []) as { guide_id: string; student_id: string }[]) {
@@ -137,6 +162,7 @@ export default async function StudentsPage() {
         <StudentsClient
           students={students ?? []}
           assignmentsByStudent={assignmentsByStudent}
+          assignmentStats={assignmentStats}
           allGuides={(allGuides ?? []) as { id: string; title: string; subject: string | null; domain: string | null }[]}
           sharesByStudent={sharesByStudent}
           wbSharedWithStudents={wbSharedWithStudents}

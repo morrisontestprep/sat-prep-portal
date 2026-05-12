@@ -34,9 +34,12 @@ type GuideInfo = {
 type WBShareItem = { shareId: string; boardId: string; boardName: string; accessLevel: string }
 type WBStudentBoard = { shareId: string; boardId: string; boardName: string }
 
+type AssignmentStat = { correct: number; total: number; seconds: number }
+
 type Props = {
   students: Student[]
   assignmentsByStudent: Record<string, Assignment[]>
+  assignmentStats: Record<string, AssignmentStat>
   allGuides: GuideInfo[]
   sharesByStudent: Record<string, string[]>
   wbSharedWithStudents: Record<string, WBShareItem[]>
@@ -52,7 +55,7 @@ type GroupedAssignment = {
   // All assignments in order (earliest first)
   all: Assignment[]
   // Convenience
-  completedRows: { completedAt: string | null }[]  // one entry per completed attempt
+  completedRows: { completedAt: string | null; assignmentId: string }[]  // one entry per completed attempt
   hasPending: boolean
   currentDueDate: string | null  // from first/most-relevant assignment
 }
@@ -73,7 +76,7 @@ function groupAssignments(assignments: Assignment[]): GroupedAssignment[] {
     const first = sorted[0]
     const completedRows = sorted
       .filter(r => r.status === 'complete')
-      .map(r => ({ completedAt: r.completed_at }))
+      .map(r => ({ completedAt: r.completed_at, assignmentId: r.id }))
     const hasPending = sorted.some(r => r.status === 'pending')
 
     return {
@@ -108,11 +111,12 @@ function fmtWithYear(iso: string) {
 }
 
 function StudentCard({
-  student, assignments, allGuides, initialSharedIds, onDeleted,
+  student, assignments, assignmentStats, allGuides, initialSharedIds, onDeleted,
   initialWbShared, initialWbStudentBoards,
 }: {
   student: Student
   assignments: Assignment[]
+  assignmentStats: Record<string, AssignmentStat>
   allGuides: GuideInfo[]
   initialSharedIds: string[]
   onDeleted: (id: string) => void
@@ -619,20 +623,39 @@ function StudentCard({
                     {/* Status + completion dates */}
                     <td className="px-4 py-2.5">
                       <div className="flex flex-col gap-1">
-                        {/* Completed attempts — show date if available, just badge if not */}
-                        {g.completedRows.map((r, idx) => (
-                          <div key={idx} className="flex items-center gap-1.5">
-                            <span className="text-xs px-2 py-0.5 rounded-full whitespace-nowrap"
-                              style={{ background: '#f0fdf4', color: '#16a34a' }}>
-                              Complete
-                            </span>
-                            {r.completedAt && (
-                              <span className="text-xs whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>
-                                {fmt(r.completedAt)}
+                        {/* Completed attempts — show date, score, and time */}
+                        {g.completedRows.map((r, idx) => {
+                          const stat = assignmentStats[r.assignmentId]
+                          const timeStr = stat && stat.seconds > 0
+                            ? stat.seconds >= 60
+                              ? `${Math.round(stat.seconds / 60)}m`
+                              : `${stat.seconds}s`
+                            : null
+                          return (
+                            <div key={idx} className="flex items-center gap-1.5 flex-wrap">
+                              <span className="text-xs px-2 py-0.5 rounded-full whitespace-nowrap"
+                                style={{ background: '#f0fdf4', color: '#16a34a' }}>
+                                Complete
                               </span>
-                            )}
-                          </div>
-                        ))}
+                              {stat && stat.total > 0 && (
+                                <span className="text-xs font-medium whitespace-nowrap"
+                                  style={{ color: stat.correct / stat.total >= 0.7 ? '#16a34a' : stat.correct / stat.total >= 0.5 ? '#d97706' : '#dc2626' }}>
+                                  {stat.correct}/{stat.total}
+                                </span>
+                              )}
+                              {timeStr && (
+                                <span className="text-xs whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>
+                                  · {timeStr}
+                                </span>
+                              )}
+                              {r.completedAt && (
+                                <span className="text-xs whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>
+                                  {fmt(r.completedAt)}
+                                </span>
+                              )}
+                            </div>
+                          )
+                        })}
                         {/* Pending */}
                         {g.hasPending && (
                           <span className="text-xs px-2 py-0.5 rounded-full self-start whitespace-nowrap"
@@ -698,7 +721,7 @@ function StudentCard({
 }
 
 export default function StudentsClient({
-  students: initialStudents, assignmentsByStudent, allGuides, sharesByStudent,
+  students: initialStudents, assignmentsByStudent, assignmentStats, allGuides, sharesByStudent,
   wbSharedWithStudents, wbStudentBoardsForTeacher,
 }: Props) {
   const [students, setStudents] = useState(initialStudents)
@@ -723,6 +746,7 @@ export default function StudentsClient({
           key={student.id}
           student={student}
           assignments={assignmentsByStudent[student.id] ?? []}
+          assignmentStats={assignmentStats}
           allGuides={allGuides}
           initialSharedIds={sharesByStudent[student.id] ?? []}
           onDeleted={handleDeleted}

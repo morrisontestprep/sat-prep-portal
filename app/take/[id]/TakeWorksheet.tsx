@@ -66,6 +66,7 @@ export default function TakeWorksheet({
   const [justSubmitted, setJustSubmitted] = useState(false)
   const [freeResponseInput, setFreeResponseInput] = useState('')
   const [isMobile, setIsMobile] = useState(false)
+  const [calcOpen, setCalcOpen] = useState(false)
   // Explanations keyed by question_id, fetched once the worksheet is complete
   const [explanations, setExplanations] = useState<Record<string, Array<{ text: string; canvasData: string | null }>>>({})
 
@@ -420,7 +421,7 @@ export default function TakeWorksheet({
     const reviewExp = reviewQ ? (explanations[reviewQ.id] ?? []) : []
 
     return (
-      <main className="flex-1 flex flex-col" style={{ minHeight: 0 }}>
+      <main className="flex-1 flex flex-col" style={{ minHeight: 0, paddingRight: calcOpen ? 'clamp(360px, 42vw, 580px)' : 0, transition: 'padding-right 0.2s ease' }}>
 
         {/* ── Top bar (same style as active quiz) ───────────────────────── */}
         <div className="border-b px-4 sm:px-6 py-3 flex-shrink-0"
@@ -653,7 +654,7 @@ export default function TakeWorksheet({
           </div>
         </div>
 
-        <DesmosCalculator />
+        <DesmosCalculator variant="panel" onOpenChange={setCalcOpen} />
         {currentQ?.subject === 'math' && <FormulasButton hasCalculator />}
       </main>
     )
@@ -663,7 +664,7 @@ export default function TakeWorksheet({
   // ACTIVE QUIZ: One question at a time
   // ═══════════════════════════════════════════════════════════════════════════
   return (
-    <main className="flex-1 flex flex-col" style={{ minHeight: 0 }}>
+    <main className="flex-1 flex flex-col" style={{ minHeight: 0, paddingRight: calcOpen ? 'clamp(360px, 42vw, 580px)' : 0, transition: 'padding-right 0.2s ease' }}>
       {/* Top bar with progress */}
       <div className="border-b px-4 sm:px-6 py-3 flex-shrink-0" style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
         <div className="max-w-2xl mx-auto">
@@ -865,7 +866,7 @@ export default function TakeWorksheet({
         </div>
       </div>
 
-      <DesmosCalculator />
+      <DesmosCalculator variant="panel" onOpenChange={setCalcOpen} />
       {currentQ?.subject === 'math' && <FormulasButton hasCalculator />}
     </main>
   )
