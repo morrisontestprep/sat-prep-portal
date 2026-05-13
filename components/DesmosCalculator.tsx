@@ -215,13 +215,14 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange, onWi
     if (!open || !scriptLoaded || !window.Desmos) return
     const el = containerRef.current
     if (!el) return
+
     instanceRef.current?.destroy()
     instanceRef.current =
       mode === 'graphing'
         ? window.Desmos.GraphingCalculator(el, {
             keypad:            true,
             expressions:       true,
-            expressionsTopbar: true,   // shows +table, regression bar, etc.
+            expressionsTopbar: true,
             settingsMenu:      true,
             zoomButtons:       true,
           })
@@ -229,11 +230,36 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange, onWi
             keypad:       true,
             settingsMenu: false,
           })
+
+    // Wait two animation frames so the browser finishes layout before Desmos
+    // measures the container. Without this, first-click often gets 0×0 dimensions
+    // and renders blank (a refresh "fixes" it because the script is then cached
+    // and loads before the user clicks, so layout has already settled).
+    let raf1: number, raf2: number
+    raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        instanceRef.current?.resize()
+      })
+    })
+    return () => {
+      cancelAnimationFrame(raf1)
+      cancelAnimationFrame(raf2)
+    }
   }, [open, scriptLoaded, mode])
 
   useEffect(() => () => { instanceRef.current?.destroy() }, [])
 
+  // Keep Desmos sized correctly whenever the float window is resized
   useEffect(() => { if (open) instanceRef.current?.resize() }, [size, open])
+
+  // ResizeObserver: catches any layout shift the above misses (e.g. panel slide-in)
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => instanceRef.current?.resize())
+    ro.observe(el)
+    return () => ro.disconnect()
+  })
 
   // ── Panel mode: resize Desmos after slide-in animation + on window resize ─
   useEffect(() => {
@@ -313,7 +339,7 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange, onWi
     <>
       <Script
         src="https://www.desmos.com/api/v1.9/calculator.js?apiKey=dcb31709b452b1cf9dc26972add0fda6"
-        strategy="lazyOnload"
+        strategy="afterInteractive"
         onLoad={() => setScriptLoaded(true)}
       />
 
