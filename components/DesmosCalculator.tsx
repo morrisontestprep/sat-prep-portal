@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, memo } from 'react'
 import Script from 'next/script'
 
 declare global {
@@ -33,6 +33,104 @@ const DIR_CURSOR: Record<ResizeDir, string> = {
   ne: 'nesw-resize', sw: 'nesw-resize',
   nw: 'nwse-resize', se: 'nwse-resize',
 }
+
+// ── Stable top-level sub-components ──────────────────────────────────────────
+// These MUST live outside DesmosCalculator so React never sees a new component
+// type on re-render. Defining them inside the parent causes unmount+remount on
+// every parent render (the game timer fires every 100ms), which interrupts
+// mouse events before clicks can register.
+
+type HeaderProps = {
+  isPanel: boolean
+  mode: 'graphing' | 'scientific'
+  onModeChange: (m: 'graphing' | 'scientific') => void
+  onClose: () => void
+  onDragStart: (e: React.MouseEvent) => void
+}
+
+const CalcHeader = memo(function CalcHeader({
+  isPanel, mode, onModeChange, onClose, onDragStart,
+}: HeaderProps) {
+  return (
+    <div
+      onMouseDown={isPanel ? undefined : onDragStart}
+      className="flex items-center justify-between px-3 py-2 flex-shrink-0 border-b select-none"
+      style={{ borderColor: 'var(--border)', background: 'var(--card)', cursor: isPanel ? 'default' : 'grab' }}
+    >
+      <div className="flex items-center gap-2.5">
+        {!isPanel && (
+          <svg className="w-3.5 h-3.5 flex-shrink-0" viewBox="0 0 16 16" fill="currentColor"
+            style={{ color: 'var(--text-muted)', opacity: 0.5 }}>
+            <circle cx="4" cy="4" r="1.5"/><circle cx="4" cy="8" r="1.5"/><circle cx="4" cy="12" r="1.5"/>
+            <circle cx="9" cy="4" r="1.5"/><circle cx="9" cy="8" r="1.5"/><circle cx="9" cy="12" r="1.5"/>
+          </svg>
+        )}
+        <div className="flex items-center gap-0.5 rounded-md p-0.5" style={{ background: 'var(--background)' }}>
+          {(['graphing', 'scientific'] as const).map(m => (
+            <button
+              key={m}
+              onMouseDown={e => e.stopPropagation()}
+              onClick={() => onModeChange(m)}
+              className="px-2.5 py-0.5 rounded text-xs font-medium transition-colors"
+              style={{
+                background: mode === m ? 'var(--accent)' : 'transparent',
+                color: mode === m ? 'white' : 'var(--text-muted)',
+              }}
+            >
+              {m === 'graphing' ? 'Graphing' : 'Scientific'}
+            </button>
+          ))}
+        </div>
+      </div>
+      <button
+        onMouseDown={e => e.stopPropagation()}
+        onClick={onClose}
+        className="w-6 h-6 rounded flex items-center justify-center hover:opacity-70"
+        style={{ color: 'var(--text-muted)', cursor: 'pointer' }}
+      >
+        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+  )
+})
+
+type ToggleBtnProps = {
+  open: boolean
+  rightOffset: number
+  onToggle: () => void
+}
+
+const CalcToggleBtn = memo(function CalcToggleBtn({ open, rightOffset, onToggle }: ToggleBtnProps) {
+  return (
+    <button
+      onClick={onToggle}
+      title={open ? 'Close calculator' : 'Open Desmos calculator'}
+      className="fixed bottom-6 z-50 w-12 h-12 rounded-full shadow-lg flex items-center justify-center hover:scale-110"
+      style={{
+        right: rightOffset,
+        background: open ? '#374151' : 'var(--accent)',
+        color: 'white',
+        transition: 'right 0.2s ease, background 0.15s, transform 0.15s',
+      }}
+    >
+      {open ? (
+        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      ) : (
+        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <rect x="4" y="3" width="16" height="18" rx="2" strokeWidth="1.8" />
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8}
+            d="M8 7h8M8 11h2m4 0h2M8 15h2m4 0h2M8 19h2m4 0h2" />
+        </svg>
+      )}
+    </button>
+  )
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 type Props = {
   /** 'float' = draggable popup (default). 'panel' = docked right-side pane. */
@@ -210,6 +308,9 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange, onWi
     e.preventDefault(); e.stopPropagation()
   }, [])
 
+  const handleToggle = useCallback(() => setOpen(v => !v), [])
+  const handleClose  = useCallback(() => setOpen(false),   [])
+
   // ── Initialise / re-initialise Desmos ────────────────────────────────────
   useEffect(() => {
     if (!open || !scriptLoaded || !window.Desmos) return
@@ -233,8 +334,7 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange, onWi
 
     // Wait two animation frames so the browser finishes layout before Desmos
     // measures the container. Without this, first-click often gets 0×0 dimensions
-    // and renders blank (a refresh "fixes" it because the script is then cached
-    // and loads before the user clicks, so layout has already settled).
+    // and renders blank.
     let raf1: number, raf2: number
     raf1 = requestAnimationFrame(() => {
       raf2 = requestAnimationFrame(() => {
@@ -252,19 +352,9 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange, onWi
   // Keep Desmos sized correctly whenever the float window is resized
   useEffect(() => { if (open) instanceRef.current?.resize() }, [size, open])
 
-  // ResizeObserver: catches any layout shift the above misses (e.g. panel slide-in)
-  useEffect(() => {
-    const el = containerRef.current
-    if (!el) return
-    const ro = new ResizeObserver(() => instanceRef.current?.resize())
-    ro.observe(el)
-    return () => ro.disconnect()
-  })
-
-  // ── Panel mode: resize Desmos after slide-in animation + on window resize ─
+  // Panel mode: resize after slide-in animation + on window resize
   useEffect(() => {
     if (!isPanel || !open) return
-    // Delay matches the 0.2s CSS transition — ensures Desmos measures full width
     const t = setTimeout(() => instanceRef.current?.resize(), 220)
     const onResize = () => instanceRef.current?.resize()
     window.addEventListener('resize', onResize)
@@ -274,66 +364,16 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange, onWi
     }
   }, [isPanel, open])
 
-  // Shared header content
-  const Header = ({ onClose }: { onClose: () => void }) => (
-    <div
-      onMouseDown={isPanel ? undefined : onDragStart}
-      className="flex items-center justify-between px-3 py-2 flex-shrink-0 border-b select-none"
-      style={{ borderColor: 'var(--border)', background: 'var(--card)', cursor: isPanel ? 'default' : 'grab' }}
-    >
-      <div className="flex items-center gap-2.5">
-        {!isPanel && (
-          <svg className="w-3.5 h-3.5 flex-shrink-0" viewBox="0 0 16 16" fill="currentColor"
-            style={{ color: 'var(--text-muted)', opacity: 0.5 }}>
-            <circle cx="4" cy="4" r="1.5"/><circle cx="4" cy="8" r="1.5"/><circle cx="4" cy="12" r="1.5"/>
-            <circle cx="9" cy="4" r="1.5"/><circle cx="9" cy="8" r="1.5"/><circle cx="9" cy="12" r="1.5"/>
-          </svg>
-        )}
-        <div className="flex items-center gap-0.5 rounded-md p-0.5" style={{ background: 'var(--background)' }}>
-          {(['graphing', 'scientific'] as const).map(m => (
-            <button key={m} onMouseDown={e => e.stopPropagation()} onClick={() => setMode(m)}
-              className="px-2.5 py-0.5 rounded text-xs font-medium transition-colors"
-              style={{ background: mode === m ? 'var(--accent)' : 'transparent', color: mode === m ? 'white' : 'var(--text-muted)' }}>
-              {m === 'graphing' ? 'Graphing' : 'Scientific'}
-            </button>
-          ))}
-        </div>
-      </div>
-      <button onMouseDown={e => e.stopPropagation()} onClick={onClose}
-        className="w-6 h-6 rounded flex items-center justify-center hover:opacity-70"
-        style={{ color: 'var(--text-muted)', cursor: 'pointer' }}>
-        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-        </svg>
-      </button>
-    </div>
-  )
+  // ResizeObserver: catches any layout shift the above misses
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => instanceRef.current?.resize())
+    ro.observe(el)
+    return () => ro.disconnect()
+  })
 
-  const ToggleBtn = () => (
-    <button
-      onClick={() => setOpen(v => !v)}
-      title={open ? 'Close calculator' : 'Open Desmos calculator'}
-      className="fixed bottom-6 z-50 w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-transform hover:scale-110"
-      style={{
-        right: isPanel && open ? panelWidth + 12 : 24,
-        background: open ? '#374151' : 'var(--accent)',
-        color: 'white',
-        transition: 'right 0.2s ease, background 0.15s',
-      }}
-    >
-      {open ? (
-        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-        </svg>
-      ) : (
-        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <rect x="4" y="3" width="16" height="18" rx="2" strokeWidth="1.8" />
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8}
-            d="M8 7h8M8 11h2m4 0h2M8 15h2m4 0h2M8 19h2m4 0h2" />
-        </svg>
-      )}
-    </button>
-  )
+  const toggleBtnRight = isPanel && open ? panelWidth + 12 : 24
 
   return (
     <>
@@ -343,7 +383,7 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange, onWi
         onLoad={() => setScriptLoaded(true)}
       />
 
-      <ToggleBtn />
+      <CalcToggleBtn open={open} rightOffset={toggleBtnRight} onToggle={handleToggle} />
 
       {/* ── PANEL MODE ──────────────────────────────────────────────────────── */}
       {isPanel && (
@@ -372,7 +412,13 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange, onWi
             }}
           />
 
-          <Header onClose={() => setOpen(false)} />
+          <CalcHeader
+            isPanel={isPanel}
+            mode={mode}
+            onModeChange={setMode}
+            onClose={handleClose}
+            onDragStart={onDragStart}
+          />
           <div ref={containerRef} className="flex-1 w-full" style={{ minHeight: 0 }} />
           {!scriptLoaded && (
             <div className="absolute inset-0 flex items-center justify-center"
@@ -411,7 +457,13 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange, onWi
           </div>
 
           <div className="flex flex-col w-full h-full rounded-2xl overflow-hidden">
-            <Header onClose={() => setOpen(false)} />
+            <CalcHeader
+              isPanel={isPanel}
+              mode={mode}
+              onModeChange={setMode}
+              onClose={handleClose}
+              onDragStart={onDragStart}
+            />
             <div ref={containerRef} className="flex-1 w-full" style={{ minHeight: 0 }} />
             {!scriptLoaded && (
               <div className="absolute inset-0 flex items-center justify-center rounded-2xl"
