@@ -10,16 +10,17 @@ const transporter = nodemailer.createTransport({
   },
 })
 
-// ── Notify teacher: new student signed up ────────────────────────────────────
+// ── Notify teacher: new student needs approval ───────────────────────────────
 export async function sendStudentSignupNotification(studentName: string, studentEmail: string) {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://sat-prep-portal.vercel.app'
   await transporter.sendMail({
     from: `"Morrison Test Prep" <${TEACHER_EMAIL}>`,
     to: TEACHER_EMAIL,
-    subject: `New student signed up: ${studentName || studentEmail}`,
+    subject: `New student needs your approval: ${studentName || studentEmail}`,
     html: `
       <div style="font-family:sans-serif;max-width:480px;margin:0 auto">
-        <h2 style="color:#4f46e5">New Student Sign-Up</h2>
-        <p>A new student just created an account on the SAT Prep Portal.</p>
+        <h2 style="color:#4f46e5">New Student Requesting Access</h2>
+        <p>A new student just signed in with Google and is waiting for your approval before they can access the portal.</p>
         <table style="border-collapse:collapse;width:100%;margin:16px 0">
           <tr>
             <td style="padding:8px 0;color:#6b7280;font-size:14px">Name</td>
@@ -30,10 +31,14 @@ export async function sendStudentSignupNotification(studentName: string, student
             <td style="padding:8px 0;font-size:14px">${studentEmail}</td>
           </tr>
         </table>
-        <a href="${process.env.NEXT_PUBLIC_APP_URL || 'https://sat-prep-portal.vercel.app'}/students"
-          style="display:inline-block;background:#4f46e5;color:white;padding:10px 20px;border-radius:8px;text-decoration:none;font-size:14px">
-          View Students
+        <p style="font-size:13px;color:#6b7280;margin-bottom:16px">
+          The student is currently seeing a "pending review" screen. Once you approve them, they'll automatically be redirected into the portal.
+        </p>
+        <a href="${appUrl}/students"
+          style="display:inline-block;background:#4f46e5;color:white;padding:12px 24px;border-radius:8px;text-decoration:none;font-size:14px;font-weight:600">
+          Review &amp; Approve in Portal →
         </a>
+        <p style="color:#9ca3af;font-size:12px;margin-top:24px">Morrison Test Prep &middot; <a href="${appUrl}" style="color:#9ca3af">${appUrl}</a></p>
       </div>
     `,
   })

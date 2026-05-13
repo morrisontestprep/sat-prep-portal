@@ -27,7 +27,6 @@ export async function GET(request: NextRequest) {
 
     const { error } = await supabase.auth.exchangeCodeForSession(code)
     if (!error) {
-      // Auto-create or update profile with name from Google OAuth
       try {
         const { data: { user } } = await supabase.auth.getUser()
         if (user) {
@@ -38,25 +37,35 @@ export async function GET(request: NextRequest) {
           const teacherEmail = process.env.TEACHER_EMAIL || 'morrisontestprep@gmail.com'
           const role = user.email === teacherEmail ? 'teacher' : 'student'
 
-          // Upsert the profile. On conflict (returning user) this is a no-op for
-          // signup_notified — the column is not included so its value is preserved.
+          // Upsert the profile.
+          // - Teachers: always marked approved.
+          // - Students: do NOT include `approved` so that:
+          //     • New rows keep the column DEFAULT (false) → pending approval
+          //     • Returning approved students keep their existing approved = true
           await supabase.from('profiles').upsert(
-            { id: user.id, email: user.email, full_name: fullName, role },
+            {
+              id: user.id,
+              email: user.email,
+              full_name: fullName,
+              role,
+              ...(role === 'teacher' ? { approved: true } : {}),
+            },
             { onConflict: 'id' }
           )
 
-          // Check the signup_notified flag. It starts as FALSE on any freshly
-          // created (or re-created after deletion) profile row. Once we send the
-          // notification we flip it to TRUE so it never fires again for that row.
+          // Read the profile to get signup_notified and approved
           const { data: profileRow } = await supabase
             .from('profiles')
-            .select('signup_notified')
+            .select('signup_notified, approved')
             .eq('id', user.id)
             .single()
 
+          const isApproved = profileRow?.approved === true
+
+          // Send a one-time notification to the teacher when a new student signs up
           const needsNotification = role === 'student' && profileRow?.signup_notified === false
 
-          console.log('[auth/callback] signup_notified:', profileRow?.signup_notified, 'needsNotification:', needsNotification)
+          console.log('[auth/callback] role:', role, 'signup_notified:', profileRow?.signup_notified, 'approved:', isApproved)
 
           if (needsNotification) {
             // Mark as notified first so a retry can't double-fire
@@ -73,12 +82,18 @@ export async function GET(request: NextRequest) {
                   type: 'signup',
                   studentName: fullName ?? '',
                   studentEmail: user.email ?? '',
+                  studentId: user.id,
                 }),
               })
               console.log('[auth/callback] Notify response status:', notifyRes.status)
             } catch (e) {
               console.error('[auth/callback] Signup notification error:', e)
             }
+          }
+
+          // Students who are not yet approved wait on the pending page
+          if (role === 'student' && !isApproved) {
+            return NextResponse.redirect(`${origin}/pending-approval`)
           }
         }
       } catch (e) {

@@ -9,6 +9,7 @@ export type TeacherNotifType =
   | 'sat_rush_started'
   | 'sat_rush_completed'
   | 'practice_completed'
+  | 'student_signup_pending'   // new student waiting for approval
 
 export interface TeacherNotifData {
   studentName?: string

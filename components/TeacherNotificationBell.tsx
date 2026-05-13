@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 
 interface TeacherNotification {
   id:         string
-  type:       'assignment_submitted' | 'sat_rush_started' | 'sat_rush_completed' | 'practice_completed' | string
+  type:       'assignment_submitted' | 'sat_rush_started' | 'sat_rush_completed' | 'practice_completed' | 'student_signup_pending' | string
   data:       Record<string, unknown>
   read:       boolean
   created_at: string
@@ -13,6 +13,15 @@ interface TeacherNotification {
 const POLL_INTERVAL_MS = 20_000   // poll every 20 seconds
 
 function notifIcon(type: string) {
+  if (type === 'student_signup_pending') {
+    // Person / user-add icon
+    return (
+      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+          d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+      </svg>
+    )
+  }
   if (type === 'assignment_submitted') {
     // Clipboard / check
     return (
@@ -41,6 +50,9 @@ function notifIcon(type: string) {
 
 function notifTitle(n: TeacherNotification): string {
   const name = (n.data.studentName as string | undefined) || 'A student'
+  if (n.type === 'student_signup_pending') {
+    return `${name} is requesting access to the portal`
+  }
   if (n.type === 'assignment_submitted') {
     const ws = (n.data.worksheetTitle as string | undefined) ?? 'an assignment'
     const score = n.data.score as string | undefined
@@ -68,6 +80,58 @@ function fmtTime(iso: string): string {
     month: 'short', day: 'numeric',
     hour: 'numeric', minute: '2-digit',
   })
+}
+
+// ── Approve button for pending-signup notifications ───────────────────────────
+function ApproveButton({
+  studentId,
+  onApproved,
+}: {
+  studentId: string
+  onApproved: () => void
+}) {
+  const [state, setState] = useState<'idle' | 'loading' | 'done'>('idle')
+
+  const handleApprove = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    setState('loading')
+    try {
+      const res = await fetch('/api/approve-student', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId }),
+      })
+      if (res.ok) {
+        setState('done')
+        onApproved()
+      } else {
+        setState('idle')
+        alert('Could not approve student. Please try from the Students page.')
+      }
+    } catch {
+      setState('idle')
+    }
+  }
+
+  if (state === 'done') {
+    return (
+      <span className="text-xs px-2.5 py-1 rounded-lg font-medium"
+        style={{ background: '#f0fdf4', color: '#16a34a' }}>
+        Approved ✓
+      </span>
+    )
+  }
+
+  return (
+    <button
+      onClick={handleApprove}
+      disabled={state === 'loading'}
+      className="text-xs px-2.5 py-1 rounded-lg font-medium disabled:opacity-50 transition-colors"
+      style={{ background: 'var(--accent)', color: '#fff' }}
+    >
+      {state === 'loading' ? 'Approving…' : 'Approve'}
+    </button>
+  )
 }
 
 export default function TeacherNotificationBell() {
@@ -177,38 +241,55 @@ export default function TeacherNotificationBell() {
                 </p>
               </div>
             ) : (
-              notifications.map(n => (
-                <div
-                  key={n.id}
-                  className="px-4 py-3 border-b"
-                  style={{
-                    borderColor: 'var(--border)',
-                    background: 'transparent',
-                  }}
-                >
-                  <div className="flex items-start gap-3">
-                    {/* Icon */}
-                    <div className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5"
-                      style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
-                      {notifIcon(n.type)}
-                    </div>
+              notifications.map(n => {
+                const isPending = n.type === 'student_signup_pending'
+                const studentId = n.data.studentId as string | undefined
 
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-medium leading-snug" style={{ color: 'var(--foreground)' }}>
-                        {notifTitle(n)}
-                      </p>
-                      {typeof n.data.studentEmail === 'string' && (
-                        <p className="text-xs truncate mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                          {n.data.studentEmail}
+                return (
+                  <div
+                    key={n.id}
+                    className="px-4 py-3 border-b"
+                    style={{
+                      borderColor: 'var(--border)',
+                      background: isPending ? 'rgba(99,102,241,0.04)' : 'transparent',
+                    }}
+                  >
+                    <div className="flex items-start gap-3">
+                      {/* Icon */}
+                      <div className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5"
+                        style={{
+                          background: isPending ? '#ede9fe' : 'var(--accent-light)',
+                          color:      isPending ? '#7c3aed' : 'var(--accent)',
+                        }}>
+                        {notifIcon(n.type)}
+                      </div>
+
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-medium leading-snug" style={{ color: 'var(--foreground)' }}>
+                          {notifTitle(n)}
                         </p>
-                      )}
-                      <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                        {fmtTime(n.created_at)}
-                      </p>
+                        {typeof n.data.studentEmail === 'string' && (
+                          <p className="text-xs truncate mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                            {n.data.studentEmail}
+                          </p>
+                        )}
+                        <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                            {fmtTime(n.created_at)}
+                          </p>
+                          {/* Inline approve button for pending-signup notifications */}
+                          {isPending && studentId && (
+                            <ApproveButton
+                              studentId={studentId}
+                              onApproved={fetchNotifications}
+                            />
+                          )}
+                        </div>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))
+                )
+              })
             )}
           </div>
         </div>

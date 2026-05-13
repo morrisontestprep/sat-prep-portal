@@ -28,15 +28,43 @@ export async function middleware(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
 
   const { pathname } = request.nextUrl
-  const isPublic = pathname.startsWith('/login') || pathname.startsWith('/auth') || pathname.startsWith('/api/')
 
+  // Paths that never require auth checks (login page, OAuth, all API routes)
+  const isPublic = pathname.startsWith('/login') || pathname.startsWith('/auth') || pathname.startsWith('/api/')
+  // The pending-approval page: authenticated students may access it; unauthenticated users go to /login
+  const isPendingApproval = pathname === '/pending-approval'
+
+  // Unauthenticated: send to login (except public paths; pending-approval requires login too)
   if (!user && !isPublic) {
     return NextResponse.redirect(new URL('/login', request.url))
   }
 
-  // Route authenticated users appropriately
   if (user) {
     const isTeacher = user.email === TEACHER_EMAIL
+
+    // ── Approval gate (students only) ──────────────────────────────────────────
+    // We skip this for the teacher and for paths that don't need an approval check.
+    if (!isTeacher) {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('approved')
+        .eq('id', user.id)
+        .single()
+
+      const isApproved = profile?.approved === true
+
+      if (!isApproved && !isPendingApproval) {
+        // Unapproved student trying to access any page → hold on the pending screen
+        return NextResponse.redirect(new URL('/pending-approval', request.url))
+      }
+
+      if (isApproved && isPendingApproval) {
+        // Approved student somehow still on the pending page → send them home
+        return NextResponse.redirect(new URL('/my-assignments', request.url))
+      }
+    }
+
+    // ── Normal routing for authenticated users ─────────────────────────────────
 
     // Redirect /login to appropriate home
     if (pathname === '/login') {

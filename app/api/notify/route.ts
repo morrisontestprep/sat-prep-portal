@@ -19,8 +19,17 @@ export async function POST(request: Request) {
     // Signup notifications come from auth/callback before a session exists,
     // so we skip auth for this type only.
     if (type === 'signup') {
-      const { studentName, studentEmail } = body
-      await sendStudentSignupNotification(studentName ?? '', studentEmail ?? '')
+      const { studentName, studentEmail, studentId } = body
+      await Promise.allSettled([
+        // Email the teacher
+        sendStudentSignupNotification(studentName ?? '', studentEmail ?? ''),
+        // In-app bell notification with the approve button
+        notifyTeacher('student_signup_pending', {
+          studentName:  studentName ?? '',
+          studentEmail: studentEmail ?? '',
+          studentId:    studentId ?? '',
+        }),
+      ])
       return NextResponse.json({ ok: true })
     }
 

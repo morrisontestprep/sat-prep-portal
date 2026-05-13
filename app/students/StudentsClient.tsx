@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/utils/supabase/client'
 import MasterFileModal from '@/components/MasterFileModal'
@@ -38,6 +38,7 @@ type AssignmentStat = { correct: number; total: number; seconds: number }
 
 type Props = {
   students: Student[]
+  pendingStudents: Student[]
   assignmentsByStudent: Record<string, Assignment[]>
   assignmentStats: Record<string, AssignmentStat>
   allGuides: GuideInfo[]
@@ -720,14 +721,119 @@ function StudentCard({
   )
 }
 
+// ── Pending Approval Banner ───────────────────────────────────────────────────
+
+function PendingApprovalBanner({ initialPending }: { initialPending: Student[] }) {
+  const [pending, setPending] = useState(initialPending)
+  const [approvingId, setApprovingId] = useState<string | null>(null)
+  const [approvedIds, setApprovedIds] = useState<Set<string>>(new Set())
+
+  const handleApprove = useCallback(async (studentId: string) => {
+    setApprovingId(studentId)
+    try {
+      const res = await fetch('/api/approve-student', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId }),
+      })
+      if (res.ok) {
+        setApprovedIds(prev => new Set([...prev, studentId]))
+        // Remove from pending list after a brief moment so the teacher sees the confirmation
+        setTimeout(() => setPending(prev => prev.filter(s => s.id !== studentId)), 1500)
+      } else {
+        alert('Failed to approve student. Please try again.')
+      }
+    } catch {
+      alert('Network error. Please try again.')
+    } finally {
+      setApprovingId(null)
+    }
+  }, [])
+
+  if (pending.length === 0) return null
+
+  return (
+    <div
+      className="rounded-2xl border mb-6 overflow-hidden"
+      style={{ borderColor: '#c4b5fd', background: '#faf5ff' }}
+    >
+      {/* Header */}
+      <div
+        className="flex items-center gap-3 px-5 py-3 border-b"
+        style={{ borderColor: '#c4b5fd', background: '#ede9fe' }}
+      >
+        <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0"
+          style={{ background: '#7c3aed' }}>
+          <svg className="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5}
+              d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </div>
+        <div>
+          <p className="text-sm font-semibold" style={{ color: '#5b21b6' }}>
+            {pending.length} student{pending.length !== 1 ? 's' : ''} awaiting approval
+          </p>
+          <p className="text-xs" style={{ color: '#7c3aed' }}>
+            They're on the pending screen and can't access the portal until you approve them.
+          </p>
+        </div>
+      </div>
+
+      {/* Pending student rows */}
+      <div className="divide-y" style={{ borderColor: '#ddd6fe' }}>
+        {pending.map(student => {
+          const isApproved = approvedIds.has(student.id)
+          const isApproving = approvingId === student.id
+          return (
+            <div key={student.id} className="flex items-center justify-between px-5 py-3.5 gap-4">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 text-sm font-semibold text-white"
+                  style={{ background: '#7c3aed' }}>
+                  {(student.full_name || student.email || '?').charAt(0).toUpperCase()}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate" style={{ color: '#3b0764' }}>
+                    {student.full_name || 'No name'}
+                  </p>
+                  <p className="text-xs truncate" style={{ color: '#7c3aed' }}>
+                    {student.email}
+                  </p>
+                </div>
+              </div>
+
+              {isApproved ? (
+                <span className="text-xs px-3 py-1.5 rounded-lg font-medium flex-shrink-0"
+                  style={{ background: '#f0fdf4', color: '#16a34a' }}>
+                  Approved ✓
+                </span>
+              ) : (
+                <button
+                  onClick={() => handleApprove(student.id)}
+                  disabled={isApproving}
+                  className="text-xs px-3 py-1.5 rounded-lg font-semibold flex-shrink-0 disabled:opacity-50 transition-colors"
+                  style={{ background: '#7c3aed', color: '#fff' }}
+                >
+                  {isApproving ? 'Approving…' : 'Approve Access'}
+                </button>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export default function StudentsClient({
-  students: initialStudents, assignmentsByStudent, assignmentStats, allGuides, sharesByStudent,
+  students: initialStudents, pendingStudents, assignmentsByStudent, assignmentStats, allGuides, sharesByStudent,
   wbSharedWithStudents, wbStudentBoardsForTeacher,
 }: Props) {
   const [students, setStudents] = useState(initialStudents)
   const handleDeleted = (id: string) => setStudents(prev => prev.filter(s => s.id !== id))
 
-  if (students.length === 0) {
+  if (students.length === 0 && pendingStudents.length === 0) {
     return (
       <div className="text-center py-20 rounded-2xl border-2 border-dashed" style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}>
         <svg className="w-12 h-12 mx-auto mb-3 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -741,6 +847,9 @@ export default function StudentsClient({
 
   return (
     <div className="space-y-4">
+      {/* Pending approval banner — always shown first if there are any */}
+      <PendingApprovalBanner initialPending={pendingStudents} />
+
       {students.map(student => (
         <StudentCard
           key={student.id}

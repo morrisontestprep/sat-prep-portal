@@ -8,12 +8,21 @@ export default async function StudentsPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  // Fetch all students
+  // Fetch approved students (main list)
   const { data: students } = await supabase
     .from('profiles')
     .select('id, full_name, email, created_at')
     .eq('role', 'student')
+    .eq('approved', true)
     .order('full_name', { ascending: true })
+
+  // Fetch students awaiting approval (shown in the banner at the top)
+  const { data: pendingStudents } = await supabase
+    .from('profiles')
+    .select('id, full_name, email, created_at')
+    .eq('role', 'student')
+    .eq('approved', false)
+    .order('created_at', { ascending: false })
 
   // Fetch all student assignments with worksheet info
   const { data: allAssignments } = await supabase
@@ -161,6 +170,7 @@ export default async function StudentsPage() {
 
         <StudentsClient
           students={students ?? []}
+          pendingStudents={pendingStudents ?? []}
           assignmentsByStudent={assignmentsByStudent}
           assignmentStats={assignmentStats}
           allGuides={(allGuides ?? []) as { id: string; title: string; subject: string | null; domain: string | null }[]}
