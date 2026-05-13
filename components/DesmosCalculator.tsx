@@ -320,44 +320,46 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange, onWi
   const handleClose  = useCallback(() => setOpen(false),   [])
 
   // ── Initialise / re-initialise Desmos ────────────────────────────────────
-  // Key insight: we no longer gate on `open`. The float container is always in
-  // the DOM (visibility:hidden when closed), and the panel container is always
-  // in the DOM too. Initialising eagerly — as soon as the script is ready —
-  // means Desmos measures real dimensions immediately instead of racing against
-  // a freshly-mounted element on first click.
+  // Root-cause of blank-on-first-click: Desmos measures the container in its
+  // constructor, but flex-1 heights aren't computed until the browser runs a
+  // layout pass — which happens AFTER React's synchronous commit phase. So if
+  // we call GraphingCalculator(el) immediately in the effect, el.clientHeight
+  // is still 0 and Desmos renders blank. The fix is to delay the entire
+  // initialisation (not just the resize) by two animation frames, giving the
+  // browser time to do layout before Desmos ever touches the element.
   useEffect(() => {
-    if (!scriptLoaded || !window.Desmos) return
+    if (!open || !scriptLoaded || !window.Desmos) return
     const el = containerRef.current
     if (!el) return
 
     instanceRef.current?.destroy()
-    instanceRef.current =
-      mode === 'graphing'
-        ? window.Desmos.GraphingCalculator(el, {
-            keypad:            true,
-            expressions:       true,
-            expressionsTopbar: true,
-            settingsMenu:      true,
-            zoomButtons:       true,
-          })
-        : window.Desmos.ScientificCalculator(el, {
-            keypad:       true,
-            settingsMenu: false,
-          })
+    instanceRef.current = null
 
-    // Double rAF to let the browser finish any pending layout before Desmos
-    // measures the container dimensions.
     let raf1: number, raf2: number
     raf1 = requestAnimationFrame(() => {
       raf2 = requestAnimationFrame(() => {
-        instanceRef.current?.resize()
+        if (!el || !window.Desmos) return
+        instanceRef.current?.destroy()
+        instanceRef.current =
+          mode === 'graphing'
+            ? window.Desmos.GraphingCalculator(el, {
+                keypad:            true,
+                expressions:       true,
+                expressionsTopbar: true,
+                settingsMenu:      true,
+                zoomButtons:       true,
+              })
+            : window.Desmos.ScientificCalculator(el, {
+                keypad:       true,
+                settingsMenu: false,
+              })
       })
     })
     return () => {
       cancelAnimationFrame(raf1)
       cancelAnimationFrame(raf2)
     }
-  }, [scriptLoaded, mode])  // 'open' intentionally omitted — see comment above
+  }, [open, scriptLoaded, mode])
 
   useEffect(() => () => { instanceRef.current?.destroy() }, [])
 
@@ -454,11 +456,7 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange, onWi
       )}
 
       {/* ── FLOAT MODE ──────────────────────────────────────────────────────── */}
-      {/* Always in DOM (not conditionally rendered) so Desmos can pre-initialise
-          against a stable element with real dimensions. Hidden via CSS when
-          closed — visibility:hidden preserves layout so Desmos measures
-          correctly, while pointer-events:none prevents stray interactions. */}
-      {!isPanel && (
+      {!isPanel && open && (
         <div
           ref={panelRef}
           className="fixed z-40 rounded-2xl shadow-2xl flex flex-col"
@@ -466,8 +464,6 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange, onWi
             left: pos.x, top: pos.y, width: size.w, height: size.h,
             background: 'var(--card)', border: '1px solid var(--border)',
             minWidth: MIN_W, minHeight: MIN_H, overflow: 'visible',
-            visibility: open ? 'visible' : 'hidden',
-            pointerEvents: open ? 'auto' : 'none',
           }}
         >
           {/* Resize handles */}
@@ -495,7 +491,7 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange, onWi
               onDragStart={onDragStart}
             />
             <div ref={containerRef} className="flex-1 w-full" style={{ minHeight: 0 }} />
-            {!scriptLoaded && open && (
+            {!scriptLoaded && (
               <div className="absolute inset-0 flex items-center justify-center rounded-2xl"
                 style={{ background: 'var(--card)' }}>
                 <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Loading calculator…</p>
