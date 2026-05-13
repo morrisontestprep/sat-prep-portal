@@ -188,9 +188,11 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange, onWi
     if (isPanel) onOpenChange?.(open)
   }, [open, isPanel, onOpenChange])
 
-  // ── Float: position the panel at bottom-right on first open ─────────────
+  // ── Float: position eagerly on mount (not deferred to first open) ──────
+  // Pre-positioning ensures the container has real dimensions when Desmos
+  // initialises on script load, before the user ever clicks the button.
   useEffect(() => {
-    if (!isPanel && open && !posInitialized.current) {
+    if (!isPanel && !posInitialized.current) {
       const w = window.innerWidth
       const h = window.innerHeight
       const panelW = Math.min(DEFAULT_W, w - 48)
@@ -203,7 +205,13 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange, onWi
       setSize({ w: panelW, h: panelH })
       posInitialized.current = true
     }
-  }, [open, isPanel])
+  }, [isPanel])
+
+  // If the Desmos script was already cached (e.g. component unmount→remount),
+  // onLoad won't fire again — detect it synchronously on mount instead.
+  useEffect(() => {
+    if (window.Desmos) setScriptLoaded(true)
+  }, [])
 
   // ── Float: global mouse handlers ─────────────────────────────────────────
   useEffect(() => {
@@ -312,8 +320,13 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange, onWi
   const handleClose  = useCallback(() => setOpen(false),   [])
 
   // ── Initialise / re-initialise Desmos ────────────────────────────────────
+  // Key insight: we no longer gate on `open`. The float container is always in
+  // the DOM (visibility:hidden when closed), and the panel container is always
+  // in the DOM too. Initialising eagerly — as soon as the script is ready —
+  // means Desmos measures real dimensions immediately instead of racing against
+  // a freshly-mounted element on first click.
   useEffect(() => {
-    if (!open || !scriptLoaded || !window.Desmos) return
+    if (!scriptLoaded || !window.Desmos) return
     const el = containerRef.current
     if (!el) return
 
@@ -332,9 +345,8 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange, onWi
             settingsMenu: false,
           })
 
-    // Wait two animation frames so the browser finishes layout before Desmos
-    // measures the container. Without this, first-click often gets 0×0 dimensions
-    // and renders blank.
+    // Double rAF to let the browser finish any pending layout before Desmos
+    // measures the container dimensions.
     let raf1: number, raf2: number
     raf1 = requestAnimationFrame(() => {
       raf2 = requestAnimationFrame(() => {
@@ -345,24 +357,36 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange, onWi
       cancelAnimationFrame(raf1)
       cancelAnimationFrame(raf2)
     }
-  }, [open, scriptLoaded, mode])
+  }, [scriptLoaded, mode])  // 'open' intentionally omitted — see comment above
 
   useEffect(() => () => { instanceRef.current?.destroy() }, [])
 
   // Keep Desmos sized correctly whenever the float window is resized
   useEffect(() => { if (open) instanceRef.current?.resize() }, [size, open])
 
-  // Panel mode: resize after slide-in animation + on window resize
+  // Resize whenever the calculator becomes visible (open) so any layout shifts
+  // that happened while it was hidden are corrected.
   useEffect(() => {
-    if (!isPanel || !open) return
-    const t = setTimeout(() => instanceRef.current?.resize(), 220)
+    if (!open) return
+    // Panel: also wait for the slide-in CSS transition (~200ms) to finish
+    const delay = isPanel ? 220 : 0
+    let raf1: number, raf2: number
+    const t = setTimeout(() => {
+      raf1 = requestAnimationFrame(() => {
+        raf2 = requestAnimationFrame(() => {
+          instanceRef.current?.resize()
+        })
+      })
+    }, delay)
     const onResize = () => instanceRef.current?.resize()
     window.addEventListener('resize', onResize)
     return () => {
       clearTimeout(t)
+      cancelAnimationFrame(raf1!)
+      cancelAnimationFrame(raf2!)
       window.removeEventListener('resize', onResize)
     }
-  }, [isPanel, open])
+  }, [open, isPanel])
 
   // ResizeObserver: catches any layout shift the above misses
   useEffect(() => {
@@ -430,7 +454,11 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange, onWi
       )}
 
       {/* ── FLOAT MODE ──────────────────────────────────────────────────────── */}
-      {!isPanel && open && (
+      {/* Always in DOM (not conditionally rendered) so Desmos can pre-initialise
+          against a stable element with real dimensions. Hidden via CSS when
+          closed — visibility:hidden preserves layout so Desmos measures
+          correctly, while pointer-events:none prevents stray interactions. */}
+      {!isPanel && (
         <div
           ref={panelRef}
           className="fixed z-40 rounded-2xl shadow-2xl flex flex-col"
@@ -438,6 +466,8 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange, onWi
             left: pos.x, top: pos.y, width: size.w, height: size.h,
             background: 'var(--card)', border: '1px solid var(--border)',
             minWidth: MIN_W, minHeight: MIN_H, overflow: 'visible',
+            visibility: open ? 'visible' : 'hidden',
+            pointerEvents: open ? 'auto' : 'none',
           }}
         >
           {/* Resize handles */}
@@ -465,7 +495,7 @@ export default function DesmosCalculator({ variant = 'float', onOpenChange, onWi
               onDragStart={onDragStart}
             />
             <div ref={containerRef} className="flex-1 w-full" style={{ minHeight: 0 }} />
-            {!scriptLoaded && (
+            {!scriptLoaded && open && (
               <div className="absolute inset-0 flex items-center justify-center rounded-2xl"
                 style={{ background: 'var(--card)' }}>
                 <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Loading calculator…</p>
