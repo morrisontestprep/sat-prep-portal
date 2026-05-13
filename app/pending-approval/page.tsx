@@ -102,6 +102,19 @@ export default function PendingApprovalPage() {
               <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
                 This page will automatically redirect you once your account is approved. You can keep this tab open.
               </p>
+
+              <div className="mt-5 pt-4 border-t" style={{ borderColor: 'var(--border)' }}>
+                <button
+                  onClick={async () => {
+                    await supabase.auth.signOut()
+                    window.location.href = '/login'
+                  }}
+                  className="text-sm w-full py-2 rounded-xl border transition-colors"
+                  style={{ borderColor: 'var(--border)', color: 'var(--text-muted)', background: 'var(--background)' }}
+                >
+                  Sign in with a different account
+                </button>
+              </div>
             </>
           )}
         </div>
