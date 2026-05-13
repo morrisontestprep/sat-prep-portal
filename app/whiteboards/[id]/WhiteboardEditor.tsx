@@ -16,8 +16,12 @@ export type WBImage = {
 }
 export type TextEl = {
   id: string; type: 'text'
-  text: string; x: number; y: number; color: string; size: number
-  bold?: boolean; italic?: boolean
+  html: string        // rich text (innerHTML)
+  text: string        // plain text (for measurement / legacy)
+  x: number; y: number
+  w: number           // box width in world coords (0 = auto)
+  color: string; size: number
+  bold?: boolean; italic?: boolean  // legacy whole-element flags
 }
 export type WBEl = Stroke | WBImage | TextEl
 
@@ -29,7 +33,6 @@ type ShareRow = {
   access_level: 'view' | 'edit'
   profiles: { full_name: string | null; email: string | null } | null
 }
-
 type StudentInfo = { id: string; full_name: string | null; email: string | null }
 
 type Props = {
@@ -54,7 +57,7 @@ const AUTOSAVE_MS = 1500
 const MIN_SCALE   = 0.1
 const MAX_SCALE   = 10
 const TOPBAR_H    = 52
-const HANDLE_PX   = 8  // resize handle size in screen pixels
+const HANDLE_PX   = 8
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -69,8 +72,7 @@ function worldToScreen(wx: number, wy: number, v: View) {
 
 function simplify(pts: number[][], tol: number): number[][] {
   if (pts.length <= 2) return pts
-  const [fx, fy] = pts[0]
-  const [lx, ly] = pts[pts.length - 1]
+  const [fx, fy] = pts[0]; const [lx, ly] = pts[pts.length - 1]
   let maxD = 0, maxI = 0
   const dx = lx - fx, dy = ly - fy
   const len = Math.sqrt(dx * dx + dy * dy)
@@ -90,7 +92,107 @@ function simplify(pts: number[][], tol: number): number[][] {
 
 function fontStr(size: number, bold?: boolean, italic?: boolean) {
   const parts = [italic ? 'italic' : '', bold ? 'bold' : ''].filter(Boolean)
-  return `${parts.join(' ')} ${size}px -apple-system, sans-serif`.trimStart()
+  return `${parts.join(' ')} ${size}px -apple-system, BlinkMacSystemFont, sans-serif`.trimStart()
+}
+
+// ── Rich text helpers ─────────────────────────────────────────────────────────
+
+type TextRun = { text: string; bold: boolean; italic: boolean; underline: boolean }
+
+/** Parse HTML innerHTML into styled text runs for canvas rendering. */
+function parseHtmlToRuns(html: string, defBold = false, defItalic = false): TextRun[] {
+  if (!html) return []
+  if (typeof document === 'undefined') return [{ text: html, bold: defBold, italic: defItalic, underline: false }]
+  const runs: TextRun[] = []
+  const div = document.createElement('div')
+  div.innerHTML = html
+
+  function walk(node: Node, b: boolean, i: boolean, u: boolean) {
+    if (node.nodeType === 3) {
+      const t = node.textContent || ''
+      if (t) runs.push({ text: t, bold: b, italic: i, underline: u })
+      return
+    }
+    if (node.nodeType !== 1) return
+    const el = node as HTMLElement
+    const tag = el.tagName?.toLowerCase() || ''
+    if (tag === 'br') { runs.push({ text: '\n', bold: b, italic: i, underline: u }); return }
+    const nb = b || tag === 'b' || tag === 'strong'
+    const ni = i || tag === 'i' || tag === 'em'
+    const nu = u || tag === 'u'
+    for (const child of Array.from(node.childNodes)) walk(child, nb, ni, nu)
+    if ((tag === 'div' || tag === 'p') && node.childNodes.length > 0) {
+      if (runs.length === 0 || runs[runs.length - 1].text !== '\n')
+        runs.push({ text: '\n', bold: b, italic: i, underline: u })
+    }
+  }
+
+  for (const child of Array.from(div.childNodes)) walk(child, defBold, defItalic, false)
+  while (runs.length > 0 && runs[runs.length - 1].text === '\n') runs.pop()
+  return runs
+}
+
+/** Render rich text runs on canvas with optional word-wrap. */
+function renderRichText(
+  ctx: CanvasRenderingContext2D,
+  runs: TextRun[],
+  x: number, startY: number,
+  boxW: number,    // 0 = no wrap
+  lineH: number,
+  baseSize: number,
+  color: string,
+) {
+  ctx.fillStyle = color
+  let curX = x, curY = startY
+
+  for (const run of runs) {
+    ctx.font = fontStr(baseSize, run.bold, run.italic)
+    const parts = run.text.split('\n')
+    for (let pi = 0; pi < parts.length; pi++) {
+      if (pi > 0) { curX = x; curY += lineH }
+      const part = parts[pi]
+      if (!part) continue
+      if (boxW <= 0) {
+        ctx.fillText(part, curX, curY)
+        if (run.underline) drawUnderline(ctx, curX, curY, ctx.measureText(part).width, baseSize, color)
+        curX += ctx.measureText(part).width
+      } else {
+        const tokens = part.split(/(\s+)/)
+        for (const tok of tokens) {
+          if (!tok) continue
+          const tw = ctx.measureText(tok).width
+          if (curX > x && tok.trim() && curX + tw > x + boxW) { curX = x; curY += lineH }
+          if (!tok.trim() && curX === x) continue
+          ctx.fillStyle = color
+          ctx.fillText(tok, curX, curY)
+          if (run.underline && tok.trim()) drawUnderline(ctx, curX, curY, tw, baseSize, color)
+          curX += tw
+        }
+      }
+    }
+  }
+}
+
+function drawUnderline(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, size: number, color: string) {
+  ctx.save()
+  ctx.strokeStyle = color
+  ctx.lineWidth = Math.max(0.5, size * 0.07)
+  ctx.beginPath()
+  ctx.moveTo(x, y + size * 0.13)
+  ctx.lineTo(x + w, y + size * 0.13)
+  ctx.stroke()
+  ctx.restore()
+}
+
+/** Convert legacy TextEl (text + bold/italic flags) to HTML. */
+function textElToHtml(el: TextEl): string {
+  if (el.html) return el.html
+  let c = (el.text || '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\n/g, '<br>')
+  if (el.italic) c = `<i>${c}</i>`
+  if (el.bold)   c = `<b>${c}</b>`
+  return c
 }
 
 function getElBounds(
@@ -98,12 +200,15 @@ function getElBounds(
   ctx: CanvasRenderingContext2D,
 ): { x: number; y: number; w: number; h: number } {
   if (el.type === 'image') return { x: el.x, y: el.y, w: el.w, h: el.h }
-  ctx.font = fontStr(el.size, el.bold, el.italic)
-  const lines = el.text.split('\n')
-  const maxW  = Math.max(...lines.map(l => ctx.measureText(l).width), 10)
   const lineH = el.size * 1.3
-  const totalH = lines.length * lineH
-  return { x: el.x - 2, y: el.y - el.size, w: maxW + 4, h: totalH + 4 }
+  if (el.w > 0) {
+    const lines = (el.text || '').split('\n')
+    return { x: el.x - 2, y: el.y - el.size, w: el.w + 4, h: Math.max(1, lines.length) * lineH + 4 }
+  }
+  ctx.font = fontStr(el.size, el.bold, el.italic)
+  const lines = (el.text || '').split('\n')
+  const maxW  = Math.max(...lines.map(l => ctx.measureText(l).width), 40)
+  return { x: el.x - 2, y: el.y - el.size, w: maxW + 4, h: lines.length * lineH + 4 }
 }
 
 // ── Component ──────────────────────────────────────────────────────────────────
@@ -112,12 +217,12 @@ export default function WhiteboardEditor({
   boardId, initialName, initialJson,
   isOwner, canEdit, isTeacher, students, initialShares,
 }: Props) {
-  const supabase   = createClient()
-  const canvasRef  = useRef<HTMLCanvasElement>(null)
-  const imgCache   = useRef<Map<string, HTMLImageElement>>(new Map())
-  const rafRef     = useRef<number>(0)
+  const supabase  = createClient()
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const imgCache  = useRef<Map<string, HTMLImageElement>>(new Map())
+  const rafRef    = useRef<number>(0)
 
-  // Mutable refs (avoid stale closures in canvas callbacks)
+  // Mutable refs
   const elementsRef   = useRef<WBEl[]>([])
   const viewRef       = useRef<View>({ tx: 0, ty: 0, scale: 1 })
   const activePtsRef  = useRef<number[][] | null>(null)
@@ -135,47 +240,60 @@ export default function WhiteboardEditor({
   const touch1Ref     = useRef<{ id: number; x: number; y: number } | null>(null)
   const touch2Ref     = useRef<{ id: number; x: number; y: number; dist: number } | null>(null)
 
-  // React state (UI only)
-  const [tool,       setTool]      = useState<Tool>('pen')
-  const [color,      setColor]     = useState(PEN_COLORS[0])
-  const [hlColor,    setHlColor]   = useState(HL_COLORS[0])
-  const [thickness,  setThickness] = useState(4)
-  const [boardName,  setBoardName] = useState(initialName)
-  const [saving,     setSaving]    = useState(false)
+  // Text drag-to-create ref
+  const textDragRef = useRef<{ startWx: number; startWy: number; endWx: number; endWy: number } | null>(null)
+  // Tracks ID of text element currently being edited (for canvas skip)
+  const textEditingIdRef = useRef<string | null>(null)
+  // Rich-text runs cache: id → { html, runs }
+  const runsCacheRef = useRef<Map<string, { html: string; runs: TextRun[] }>>(new Map())
+
+  // React state
+  const [tool,       setTool]       = useState<Tool>('pen')
+  const [color,      setColor]      = useState(PEN_COLORS[0])
+  const [hlColor,    setHlColor]    = useState(HL_COLORS[0])
+  const [thickness,  setThickness]  = useState(4)
+  const [boardName,  setBoardName]  = useState(initialName)
+  const [saving,     setSaving]     = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
-  // Text state
-  const [textInput,  setTextInput]  = useState('')
-  const [textPos,    setTextPos]    = useState<{ wx: number; wy: number } | null>(null)
-  const [textEditId, setTextEditId] = useState<string | null>(null)
-  const [textColor,  setTextColor]  = useState(PEN_COLORS[0])
-  const [textSize,   setTextSize]   = useState(18)
-  const [textBold,   setTextBold]   = useState(false)
-  const [textItalic, setTextItalic] = useState(false)
+  // Text editing state
+  type TextEditing = {
+    id: string | null        // null = new element
+    wx: number; wy: number   // world baseline position
+    w: number                // world box width (0 = auto)
+    html: string
+    color: string
+    size: number
+    key: number              // increment to force contenteditable remount
+  }
+  const [textEditing, setTextEditing] = useState<TextEditing | null>(null)
+  const [textSize,    setTextSize]    = useState(18)
+  const [textColor,   setTextColor]   = useState(PEN_COLORS[0])
+  const editRef = useRef<HTMLDivElement>(null)
 
-  // Share modal state
+  // Share modal
   const [showShare,   setShowShare]   = useState(false)
-  const [shares,      setShares]      = useState<ShareRow[]>(
-    Array.isArray(initialShares) ? initialShares : []
-  )
+  const [shares,      setShares]      = useState<ShareRow[]>(Array.isArray(initialShares) ? initialShares : [])
   const [shareTarget, setShareTarget] = useState<Set<string>>(new Set())
   const [shareAccess, setShareAccess] = useState<'view'|'edit'>('view')
   const [sharing,     setSharing]     = useState(false)
   const [shareError,  setShareError]  = useState<string | null>(null)
 
-  const saveTimer      = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  const textInputRef   = useRef<HTMLTextAreaElement>(null)
-  const textClientXY   = useRef<{ x: number; y: number } | null>(null)
-  const textFocusedRef = useRef(false)
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
-  // ── Load initial canvas data ───────────────────────────────────────────────
+  // ── Load initial data ─────────────────────────────────────────────────────
+  // scheduleRender ref so image onload callbacks can call it without stale closures
+  const scheduleRenderRef = useRef<() => void>(() => {})
+
   useEffect(() => {
     try {
       const data = JSON.parse(initialJson) as { elements: WBEl[] }
       elementsRef.current = data.elements ?? []
       for (const el of elementsRef.current) {
         if (el.type === 'image' && !imgCache.current.has(el.url)) {
-          const img = new Image(); img.src = el.url
+          const img = new Image()
+          img.onload = () => scheduleRenderRef.current()
+          img.src = el.url
           imgCache.current.set(el.url, img)
         }
       }
@@ -186,10 +304,11 @@ export default function WhiteboardEditor({
   const render = useCallback(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const ctx    = canvas.getContext('2d')!
+    const ctx   = canvas.getContext('2d')!
     const { tx, ty, scale } = viewRef.current
     const els   = elementsRef.current
     const selId = selectedIdRef.current
+    const editId = textEditingIdRef.current
 
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     ctx.fillStyle = '#ffffff'
@@ -206,8 +325,7 @@ export default function WhiteboardEditor({
         ctx.globalAlpha = el.opacity
         ctx.strokeStyle = el.color
         ctx.lineWidth   = el.width
-        ctx.lineCap     = 'round'
-        ctx.lineJoin    = 'round'
+        ctx.lineCap = 'round'; ctx.lineJoin = 'round'
         ctx.beginPath()
         ctx.moveTo(el.pts[0][0], el.pts[0][1])
         for (let i = 1; i < el.pts.length; i++) ctx.lineTo(el.pts[i][0], el.pts[i][1])
@@ -220,22 +338,31 @@ export default function WhiteboardEditor({
           if (selId === el.id) drawSelectionBox(ctx, el.x, el.y, el.w, el.h)
         }
       } else if (el.type === 'text') {
+        // Skip element being edited — contenteditable shows it
+        if (editId === el.id) continue
+
+        // Get (or compute + cache) text runs
+        const htmlKey = el.html || el.text || ''
+        let cached = runsCacheRef.current.get(el.id)
+        if (!cached || cached.html !== htmlKey) {
+          const runs = parseHtmlToRuns(el.html || el.text || '', el.bold, el.italic)
+          cached = { html: htmlKey, runs }
+          runsCacheRef.current.set(el.id, cached)
+        }
+
         ctx.save()
-        ctx.font      = fontStr(el.size, el.bold, el.italic)
-        ctx.fillStyle = el.color
-        const lines  = el.text.split('\n')
-        const lineH  = el.size * 1.3
-        lines.forEach((line, i) => ctx.fillText(line, el.x, el.y + i * lineH))
+        const lineH = el.size * 1.3
+        renderRichText(ctx, cached.runs, el.x, el.y, el.w, lineH, el.size, el.color)
+
         if (selId === el.id) {
-          const maxW   = Math.max(...lines.map(l => ctx.measureText(l).width), 10)
-          const totalH = lines.length * lineH
-          drawSelectionBox(ctx, el.x - 2, el.y - el.size, maxW + 4, totalH + 4)
+          const bounds = getElBounds(el, ctx)
+          drawSelectionBox(ctx, bounds.x, bounds.y, bounds.w, bounds.h)
         }
         ctx.restore()
       }
     }
 
-    // Active stroke being drawn
+    // Active drawing stroke
     const pts = activePtsRef.current
     if (pts && pts.length > 1) {
       const isHl = tool === 'highlighter'
@@ -243,8 +370,7 @@ export default function WhiteboardEditor({
       ctx.globalAlpha = isHl ? HL_OPACITY : 1
       ctx.strokeStyle = isHl ? hlColor : (tool === 'eraser' ? '#ffffff' : color)
       ctx.lineWidth   = isHl ? 24 : (tool === 'eraser' ? 28 : thickness)
-      ctx.lineCap     = 'round'
-      ctx.lineJoin    = 'round'
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round'
       ctx.beginPath()
       ctx.moveTo(pts[0][0], pts[0][1])
       for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1])
@@ -252,32 +378,45 @@ export default function WhiteboardEditor({
       ctx.restore()
     }
 
+    // Drag-to-create text preview
+    const td = textDragRef.current
+    if (td && tool === 'text') {
+      const x = Math.min(td.startWx, td.endWx)
+      const y = Math.min(td.startWy, td.endWy)
+      const w = Math.abs(td.endWx - td.startWx)
+      const h = Math.abs(td.endWy - td.startWy)
+      if (w > 5 || h > 5) {
+        ctx.save()
+        ctx.strokeStyle = '#3b5bdb'
+        ctx.lineWidth = 1.5 / scale
+        ctx.setLineDash([6 / scale, 3 / scale])
+        ctx.strokeRect(x, y, w, h)
+        ctx.setLineDash([])
+        ctx.restore()
+      }
+    }
+
     ctx.restore()
   }, [tool, color, hlColor, thickness])
+
+  useEffect(() => { scheduleRenderRef.current = scheduleRender }, ) // always current
 
   function drawSelectionBox(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
     const s  = viewRef.current.scale
     const hs = HANDLE_PX / s
     ctx.save()
-    ctx.strokeStyle = '#3b5bdb'
-    ctx.lineWidth   = 1.5 / s
+    ctx.strokeStyle = '#3b5bdb'; ctx.lineWidth = 1.5 / s
     ctx.setLineDash([6 / s, 3 / s])
     ctx.strokeRect(x - 4, y - 4, w + 8, h + 8)
     ctx.setLineDash([])
-    // Corner resize handles
     const corners = [
-      [x - 4,           y - 4          ],  // TL
-      [x + w + 4 - hs,  y - 4          ],  // TR
-      [x + w + 4 - hs,  y + h + 4 - hs],  // BR
-      [x - 4,           y + h + 4 - hs],  // BL
+      [x - 4,           y - 4          ],
+      [x + w + 4 - hs,  y - 4          ],
+      [x + w + 4 - hs,  y + h + 4 - hs],
+      [x - 4,           y + h + 4 - hs],
     ]
-    ctx.fillStyle   = '#ffffff'
-    ctx.strokeStyle = '#3b5bdb'
-    ctx.lineWidth   = 1 / s
-    for (const [hx, hy] of corners) {
-      ctx.fillRect(hx, hy, hs, hs)
-      ctx.strokeRect(hx, hy, hs, hs)
-    }
+    ctx.fillStyle = '#ffffff'; ctx.strokeStyle = '#3b5bdb'; ctx.lineWidth = 1 / s
+    for (const [hx, hy] of corners) { ctx.fillRect(hx, hy, hs, hs); ctx.strokeRect(hx, hy, hs, hs) }
     ctx.restore()
   }
 
@@ -289,8 +428,7 @@ export default function WhiteboardEditor({
   // ── Canvas resize ─────────────────────────────────────────────────────────
   useEffect(() => {
     const resize = () => {
-      const canvas = canvasRef.current
-      if (!canvas) return
+      const canvas = canvasRef.current; if (!canvas) return
       canvas.width  = window.innerWidth
       canvas.height = window.innerHeight - TOPBAR_H
       scheduleRender()
@@ -300,20 +438,25 @@ export default function WhiteboardEditor({
     return () => window.removeEventListener('resize', resize)
   }, [scheduleRender])
 
-  // ── Focus text input when text tool places a pin ──────────────────────────
+  // ── Sync textEditing → ref so render can skip edited element ──────────────
   useEffect(() => {
-    if (textPos) {
-      textFocusedRef.current = false
-      // Two rAF passes guarantee the input has mounted and painted before focus
-      let raf1: number, raf2: number
-      raf1 = requestAnimationFrame(() => {
-        raf2 = requestAnimationFrame(() => {
-          textInputRef.current?.focus()
-        })
-      })
-      return () => { cancelAnimationFrame(raf1); cancelAnimationFrame(raf2) }
-    }
-  }, [textPos])
+    textEditingIdRef.current = textEditing?.id ?? null
+    scheduleRender()
+  }, [textEditing, scheduleRender])
+
+  // ── Set innerHTML + focus when edit session opens ─────────────────────────
+  useEffect(() => {
+    if (!textEditing || !editRef.current) return
+    editRef.current.innerHTML = textEditing.html
+    editRef.current.focus()
+    // cursor to end
+    const range = document.createRange()
+    range.selectNodeContents(editRef.current)
+    range.collapse(false)
+    const sel = window.getSelection()
+    sel?.removeAllRanges()
+    sel?.addRange(range)
+  }, [textEditing?.key]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Auto-save ─────────────────────────────────────────────────────────────
   const scheduleSave = useCallback(() => {
@@ -324,51 +467,38 @@ export default function WhiteboardEditor({
       const json = JSON.stringify({ version: 1, elements: elementsRef.current })
       try {
         const res  = await fetch(`/api/whiteboards/${boardId}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ canvas_json: json }),
         })
-        const data = await res.json()
-        if (!res.ok) console.error('Autosave failed:', data?.error)
-      } catch (err) {
-        console.error('Autosave network error:', err)
-      }
+        if (!res.ok) console.error('Autosave failed:', await res.json())
+      } catch (err) { console.error('Autosave error:', err) }
       setSaving(false)
     }, AUTOSAVE_MS)
   }, [boardId, canEdit])
 
   // ── Hit testing ───────────────────────────────────────────────────────────
   const hitTest = useCallback((wx: number, wy: number): WBEl | null => {
-    const els = [...elementsRef.current].reverse()
-    for (const el of els) {
+    for (const el of [...elementsRef.current].reverse()) {
       if (el.type === 'image') {
         if (wx >= el.x && wx <= el.x + el.w && wy >= el.y && wy <= el.y + el.h) return el
       } else if (el.type === 'text') {
-        const canvas = canvasRef.current
-        if (!canvas) continue
+        const canvas = canvasRef.current; if (!canvas) continue
         const ctx = canvas.getContext('2d')!
-        ctx.font = fontStr(el.size, el.bold, el.italic)
-        const lines  = el.text.split('\n')
-        const maxW   = Math.max(...lines.map(l => ctx.measureText(l).width), 10)
-        const totalH = lines.length * el.size * 1.3
-        if (wx >= el.x - 2 && wx <= el.x + maxW + 2 && wy >= el.y - el.size && wy <= el.y + totalH) return el
+        const b = getElBounds(el, ctx)
+        if (wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h) return el
       }
     }
     return null
   }, [])
 
-  // Returns handle index 0-3 (TL/TR/BR/BL) or -1 if not on a handle
   const hitTestHandle = useCallback((wx: number, wy: number, el: WBImage | TextEl): number => {
-    const canvas = canvasRef.current
-    if (!canvas) return -1
+    const canvas = canvasRef.current; if (!canvas) return -1
     const ctx = canvas.getContext('2d')!
     const { x, y, w, h } = getElBounds(el, ctx)
     const hs = HANDLE_PX / viewRef.current.scale
     const corners = [
-      [x - 4,           y - 4          ],
-      [x + w + 4 - hs,  y - 4          ],
-      [x + w + 4 - hs,  y + h + 4 - hs],
-      [x - 4,           y + h + 4 - hs],
+      [x - 4, y - 4], [x + w + 4 - hs, y - 4],
+      [x + w + 4 - hs, y + h + 4 - hs], [x - 4, y + h + 4 - hs],
     ]
     for (let i = 0; i < corners.length; i++) {
       const [hx, hy] = corners[i]
@@ -377,18 +507,57 @@ export default function WhiteboardEditor({
     return -1
   }, [])
 
-  // ── Pointer helpers ───────────────────────────────────────────────────────
   const getCanvasXY = (e: React.PointerEvent | PointerEvent) => {
     const canvas = canvasRef.current!
-    const rect   = canvas.getBoundingClientRect()
+    const rect = canvas.getBoundingClientRect()
     return [e.clientX - rect.left, e.clientY - rect.top] as [number, number]
   }
+
+  // ── Commit text edit ──────────────────────────────────────────────────────
+  const commitEdit = useCallback(() => {
+    if (!textEditing || !editRef.current) { setTextEditing(null); return }
+    const html = editRef.current.innerHTML
+    // Extract plain text for measurement / storage
+    const tmp = document.createElement('div'); tmp.innerHTML = html
+    const text = (tmp.textContent || '').trim()
+
+    if (!text) {
+      if (textEditing.id)
+        elementsRef.current = elementsRef.current.filter(el => el.id !== textEditing.id)
+      setTextEditing(null)
+      scheduleRender(); scheduleSave()
+      return
+    }
+
+    // Invalidate runs cache so re-render uses new HTML
+    if (textEditing.id) runsCacheRef.current.delete(textEditing.id)
+
+    if (textEditing.id) {
+      elementsRef.current = elementsRef.current.map(el =>
+        el.id === textEditing.id && el.type === 'text'
+          ? { ...el, html, text, color: textEditing.color, size: textEditing.size, w: textEditing.w }
+          : el
+      )
+    } else {
+      const newEl: TextEl = {
+        id: uid(), type: 'text',
+        html, text,
+        x: textEditing.wx, y: textEditing.wy,
+        w: textEditing.w,
+        color: textEditing.color,
+        size: textEditing.size,
+      }
+      elementsRef.current = [...elementsRef.current, newEl]
+    }
+    setTextEditing(null)
+    scheduleRender(); scheduleSave()
+  }, [textEditing, scheduleRender, scheduleSave])
 
   // ── Pointer events ────────────────────────────────────────────────────────
   const onPointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!canEdit && tool !== 'select') return
     const [sx, sy] = getCanvasXY(e)
-    const v        = viewRef.current
+    const v = viewRef.current
 
     if (isSpaceRef.current || tool === 'pan' || e.button === 1) {
       isPanRef.current    = true
@@ -400,17 +569,15 @@ export default function WhiteboardEditor({
     const [wx, wy] = screenToWorld(sx, sy, v)
 
     if (tool === 'select') {
-      // Check resize handles first
       if (selectedIdRef.current) {
         const selEl = elementsRef.current.find(el => el.id === selectedIdRef.current)
         if (selEl && (selEl.type === 'image' || selEl.type === 'text')) {
           const hIdx = hitTestHandle(wx, wy, selEl)
           if (hIdx >= 0) {
             const ctx = canvasRef.current!.getContext('2d')!
-            const bounds = getElBounds(selEl, ctx)
             resizeRef.current = {
               handleIdx: hIdx,
-              origBounds: bounds,
+              origBounds: getElBounds(selEl, ctx),
               origSize: selEl.type === 'text' ? selEl.size : 0,
               startWx: wx, startWy: wy,
             }
@@ -421,77 +588,61 @@ export default function WhiteboardEditor({
       }
       const hit = hitTest(wx, wy)
       if (hit) {
-        selectedIdRef.current = hit.id
-        setSelectedId(hit.id)
+        selectedIdRef.current = hit.id; setSelectedId(hit.id)
         const el = hit as WBImage | TextEl
-        dragRef.current = {
-          startWx: wx, startWy: wy,
-          origX: el.x,
-          origY: el.y,
-        }
+        dragRef.current = { startWx: wx, startWy: wy, origX: el.x, origY: el.y }
         e.currentTarget.setPointerCapture(e.pointerId)
       } else {
-        selectedIdRef.current = null
-        setSelectedId(null)
+        selectedIdRef.current = null; setSelectedId(null)
       }
-      scheduleRender()
-      return
+      scheduleRender(); return
     }
 
     if (tool === 'text') {
-      // Check if clicking on an existing text element → re-edit it
+      // Click on existing text → re-edit
       const hit = hitTest(wx, wy)
       if (hit && hit.type === 'text') {
-        textClientXY.current = { x: e.clientX, y: e.clientY }
-        setTextEditId(hit.id)
-        setTextInput(hit.text)
-        setTextColor(hit.color)
-        setTextSize(hit.size)
-        setTextBold(hit.bold ?? false)
-        setTextItalic(hit.italic ?? false)
-        setTextPos({ wx: hit.x, wy: hit.y })
+        setTextSize(hit.size); setTextColor(hit.color)
+        setTextEditing({
+          id: hit.id, wx: hit.x, wy: hit.y,
+          w: hit.w ?? 0,
+          html: textElToHtml(hit),
+          color: hit.color, size: hit.size,
+          key: Date.now(),
+        })
         return
       }
-      // New text placement
-      textClientXY.current = { x: e.clientX, y: e.clientY }
-      setTextEditId(null)
-      setTextPos({ wx, wy })
-      setTextColor(color)
-      setTextInput('')
+      // Start drag to define box width
+      textDragRef.current = { startWx: wx, startWy: wy, endWx: wx, endWy: wy }
+      e.currentTarget.setPointerCapture(e.pointerId)
       return
     }
 
     activePtsRef.current = [[wx, wy]]
     e.currentTarget.setPointerCapture(e.pointerId)
-  }, [tool, canEdit, hitTest, hitTestHandle, color, scheduleRender]) // eslint-disable-line
+  }, [tool, canEdit, hitTest, hitTestHandle, scheduleRender]) // eslint-disable-line
 
   const onPointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     const [sx, sy] = getCanvasXY(e)
-    const v        = viewRef.current
+    const v = viewRef.current
 
     if (isPanRef.current && panStartRef.current) {
       const { mx, my, tx, ty } = panStartRef.current
       viewRef.current = { ...v, tx: tx + (sx - mx), ty: ty + (sy - my) }
-      scheduleRender()
-      return
+      scheduleRender(); return
     }
 
     const [wx, wy] = screenToWorld(sx, sy, v)
 
-    // Resize
     if (resizeRef.current && selectedIdRef.current) {
       const { handleIdx, origBounds, origSize, startWx, startWy } = resizeRef.current
       const dx = wx - startWx, dy = wy - startWy
       let { x, y, w, h } = origBounds
-
-      if      (handleIdx === 0) { x += dx; y += dy; w -= dx; h -= dy }  // TL
-      else if (handleIdx === 1) { y += dy; w += dx; h -= dy }            // TR
-      else if (handleIdx === 2) { w += dx; h += dy }                     // BR
-      else if (handleIdx === 3) { x += dx; w -= dx; h += dy }            // BL
-
-      w = Math.max(20, w)
-      h = Math.max(20, h)
-
+      if      (handleIdx === 0) { x += dx; y += dy; w -= dx; h -= dy }
+      else if (handleIdx === 1) { y += dy; w += dx; h -= dy }
+      else if (handleIdx === 2) { w += dx; h += dy }
+      else if (handleIdx === 3) { x += dx; w -= dx; h += dy }
+      w = Math.max(20, w); h = Math.max(20, h)
       elementsRef.current = elementsRef.current.map(el => {
         if (el.id !== selectedIdRef.current) return el
         if (el.type === 'image') return { ...el, x, y, w, h }
@@ -502,8 +653,7 @@ export default function WhiteboardEditor({
         }
         return el
       })
-      scheduleRender()
-      return
+      scheduleRender(); return
     }
 
     if (dragRef.current && tool === 'select' && selectedIdRef.current) {
@@ -514,83 +664,78 @@ export default function WhiteboardEditor({
         if (el.type === 'image' || el.type === 'text') return { ...el, x: origX + dx, y: origY + dy }
         return el
       })
-      scheduleRender()
-      return
+      scheduleRender(); return
     }
 
-    if (activePtsRef.current) {
-      activePtsRef.current.push([wx, wy])
-      scheduleRender()
+    if (textDragRef.current) {
+      textDragRef.current.endWx = wx; textDragRef.current.endWy = wy
+      scheduleRender(); return
     }
+
+    if (activePtsRef.current) { activePtsRef.current.push([wx, wy]); scheduleRender() }
   }, [tool, scheduleRender])
 
-  const onPointerUp = useCallback(() => {
-    if (isPanRef.current) {
-      isPanRef.current    = false
-      panStartRef.current = null
-      return
-    }
-    if (resizeRef.current) {
-      resizeRef.current = null
-      scheduleSave()
-      return
-    }
-    if (dragRef.current) {
-      dragRef.current = null
-      scheduleSave()
-      return
+  const onPointerUp = useCallback((e?: React.PointerEvent | { clientX?: number; clientY?: number }) => {
+    if (isPanRef.current) { isPanRef.current = false; panStartRef.current = null; return }
+    if (resizeRef.current) { resizeRef.current = null; scheduleSave(); return }
+    if (dragRef.current) { dragRef.current = null; scheduleSave(); return }
+
+    // Finish text drag-to-create
+    if (textDragRef.current) {
+      const drag = textDragRef.current; textDragRef.current = null
+      const dragW = Math.abs(drag.endWx - drag.startWx)
+      const dragH = Math.abs(drag.endWy - drag.startWy)
+      const wx = Math.min(drag.startWx, drag.endWx)
+      // y = top of drag rect + one line height as baseline
+      const wy = Math.min(drag.startWy, drag.endWy) + textSize
+      const w  = dragW > 20 ? dragW : 0   // 0 = auto width
+      setTextEditing({
+        id: null, wx, wy,
+        w,
+        html: '',
+        color: textColor, size: textSize,
+        key: Date.now(),
+      })
+      scheduleRender(); return
     }
 
-    const pts = activePtsRef.current
-    activePtsRef.current = null
+    const pts = activePtsRef.current; activePtsRef.current = null
     if (!pts || pts.length < 2) return
 
     const simplified = simplify(pts, 0.5 / viewRef.current.scale)
     const isHl = tool === 'highlighter'
     const newEl: Stroke = {
-      id:      uid(),
-      type:    'stroke',
-      pts:     simplified,
-      color:   tool === 'eraser' ? '#ffffff' : (isHl ? hlColor : color),
-      width:   isHl ? 24 : (tool === 'eraser' ? 28 : thickness),
+      id: uid(), type: 'stroke',
+      pts: simplified,
+      color: tool === 'eraser' ? '#ffffff' : (isHl ? hlColor : color),
+      width: isHl ? 24 : (tool === 'eraser' ? 28 : thickness),
       opacity: isHl ? HL_OPACITY : 1,
     }
     elementsRef.current = [...elementsRef.current, newEl]
-    scheduleRender()
-    scheduleSave()
-  }, [tool, color, hlColor, thickness, scheduleRender, scheduleSave])
+    scheduleRender(); scheduleSave()
+  }, [tool, color, hlColor, thickness, textSize, textColor, scheduleRender, scheduleSave])
 
-  // ── Wheel (zoom) — gentler exponential scaling ────────────────────────────
+  // ── Wheel zoom ────────────────────────────────────────────────────────────
   useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
+    const canvas = canvasRef.current; if (!canvas) return
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
-      const rect  = canvas.getBoundingClientRect()
-      const mx    = e.clientX - rect.left
-      const my    = e.clientY - rect.top
-      const v     = viewRef.current
-      // ctrlKey = true during trackpad pinch on macOS (more sensitive needed)
-      // Regular scroll: very gentle
+      const rect = canvas.getBoundingClientRect()
+      const mx = e.clientX - rect.left, my = e.clientY - rect.top
+      const v  = viewRef.current
       const factor   = Math.exp(-e.deltaY * (e.ctrlKey ? 0.008 : 0.002))
       const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, v.scale * factor))
       const ratio    = newScale / v.scale
-      viewRef.current = {
-        scale: newScale,
-        tx:    mx - ratio * (mx - v.tx),
-        ty:    my - ratio * (my - v.ty),
-      }
+      viewRef.current = { scale: newScale, tx: mx - ratio * (mx - v.tx), ty: my - ratio * (my - v.ty) }
       scheduleRender()
     }
     canvas.addEventListener('wheel', onWheel, { passive: false })
     return () => canvas.removeEventListener('wheel', onWheel)
   }, [scheduleRender])
 
-  // ── Touch (draw, pan, pinch-zoom) ─────────────────────────────────────────
+  // ── Touch events ──────────────────────────────────────────────────────────
   useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-
+    const canvas = canvasRef.current; if (!canvas) return
     const onTouchStart = (e: TouchEvent) => {
       e.preventDefault()
       if (e.touches.length === 1) {
@@ -608,47 +753,38 @@ export default function WhiteboardEditor({
           touch1Ref.current    = { id: t.identifier, x: sx, y: sy }
         }
       } else if (e.touches.length === 2) {
-        activePtsRef.current = null
-        isPanRef.current     = true
+        activePtsRef.current = null; isPanRef.current = true
         const t1 = e.touches[0], t2 = e.touches[1]
         const rect = canvas.getBoundingClientRect()
         const x1 = t1.clientX - rect.left, y1 = t1.clientY - rect.top
         const x2 = t2.clientX - rect.left, y2 = t2.clientY - rect.top
         const dist = Math.hypot(x2 - x1, y2 - y1)
         const mx = (x1 + x2) / 2, my = (y1 + y2) / 2
-        const v = viewRef.current
         touch1Ref.current   = { id: t1.identifier, x: x1, y: y1 }
         touch2Ref.current   = { id: t2.identifier, x: x2, y: y2, dist }
-        panStartRef.current = { mx, my, tx: v.tx, ty: v.ty }
+        panStartRef.current = { mx, my, tx: viewRef.current.tx, ty: viewRef.current.ty }
       }
     }
-
     const onTouchMove = (e: TouchEvent) => {
       e.preventDefault()
       const rect = canvas.getBoundingClientRect()
-
       if (e.touches.length === 2 && touch2Ref.current) {
         const t1 = e.touches[0], t2 = e.touches[1]
         const x1 = t1.clientX - rect.left, y1 = t1.clientY - rect.top
         const x2 = t2.clientX - rect.left, y2 = t2.clientY - rect.top
         const newDist = Math.hypot(x2 - x1, y2 - y1)
         const mx = (x1 + x2) / 2, my = (y1 + y2) / 2
-        const v = viewRef.current
-        // Dampen pinch zoom on touch too
+        const v  = viewRef.current
         const rawRatio = newDist / touch2Ref.current.dist
         const dampedRatio = 1 + (rawRatio - 1) * 0.6
         const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, v.scale * dampedRatio))
         const { mx: omx, my: omy, tx: otx, ty: oty } = panStartRef.current!
         const ratio = newScale / v.scale
-        viewRef.current = {
-          scale: newScale,
-          tx: mx - ratio * (omx - otx) - (omx - mx),
-          ty: my - ratio * (omy - oty) - (omy - my),
-        }
+        viewRef.current = { scale: newScale, tx: mx - ratio*(omx - otx) - (omx - mx), ty: my - ratio*(omy - oty) - (omy - my) }
         touch2Ref.current = { ...touch2Ref.current, x: x1, y: y1, dist: newDist }
         scheduleRender()
       } else if (e.touches.length === 1) {
-        const t  = e.touches[0]
+        const t = e.touches[0]
         const sx = t.clientX - rect.left, sy = t.clientY - rect.top
         const v  = viewRef.current
         if (isPanRef.current && panStartRef.current) {
@@ -657,26 +793,21 @@ export default function WhiteboardEditor({
           scheduleRender()
         } else if (activePtsRef.current) {
           const [wx, wy] = screenToWorld(sx, sy, v)
-          activePtsRef.current.push([wx, wy])
-          scheduleRender()
+          activePtsRef.current.push([wx, wy]); scheduleRender()
         }
       }
     }
-
     const onTouchEnd = (e: TouchEvent) => {
       if (e.touches.length === 0) {
         onPointerUp()
-        isPanRef.current    = false
-        panStartRef.current = null
-        touch1Ref.current   = null
-        touch2Ref.current   = null
+        isPanRef.current = false; panStartRef.current = null
+        touch1Ref.current = null; touch2Ref.current = null
       }
     }
-
-    canvas.addEventListener('touchstart',  onTouchStart, { passive: false })
-    canvas.addEventListener('touchmove',   onTouchMove,  { passive: false })
-    canvas.addEventListener('touchend',    onTouchEnd,   { passive: false })
-    canvas.addEventListener('touchcancel', onTouchEnd,   { passive: false })
+    canvas.addEventListener('touchstart',  onTouchStart,  { passive: false })
+    canvas.addEventListener('touchmove',   onTouchMove,   { passive: false })
+    canvas.addEventListener('touchend',    onTouchEnd,    { passive: false })
+    canvas.addEventListener('touchcancel', onTouchEnd,    { passive: false })
     return () => {
       canvas.removeEventListener('touchstart',  onTouchStart)
       canvas.removeEventListener('touchmove',   onTouchMove)
@@ -685,19 +816,16 @@ export default function WhiteboardEditor({
     }
   }, [onPointerUp, tool, canEdit, scheduleRender])
 
-  // ── Spacebar pan ─────────────────────────────────────────────────────────
+  // ── Spacebar pan ──────────────────────────────────────────────────────────
   useEffect(() => {
     const onDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !e.repeat) {
-        if ((e.target as HTMLElement).tagName === 'INPUT') return
+      if (e.code === 'Space' && !e.repeat && (e.target as HTMLElement).tagName !== 'INPUT' && !(e.target as HTMLElement).isContentEditable)
         isSpaceRef.current = true
-      }
     }
     const onUp = (e: KeyboardEvent) => {
       if (e.code === 'Space') { isSpaceRef.current = false; isPanRef.current = false }
     }
-    window.addEventListener('keydown', onDown)
-    window.addEventListener('keyup',   onUp)
+    window.addEventListener('keydown', onDown); window.addEventListener('keyup', onUp)
     return () => { window.removeEventListener('keydown', onDown); window.removeEventListener('keyup', onUp) }
   }, [])
 
@@ -705,19 +833,17 @@ export default function WhiteboardEditor({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!canEdit) return
-      if ((e.target as HTMLElement).tagName === 'INPUT') return
+      const tgt = e.target as HTMLElement
+      if (tgt.tagName === 'INPUT' || tgt.isContentEditable) return
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIdRef.current) {
-        elementsRef.current   = elementsRef.current.filter(el => el.id !== selectedIdRef.current)
-        selectedIdRef.current = null
-        setSelectedId(null)
-        scheduleRender()
-        scheduleSave()
+        elementsRef.current = elementsRef.current.filter(el => el.id !== selectedIdRef.current)
+        selectedIdRef.current = null; setSelectedId(null)
+        scheduleRender(); scheduleSave()
       }
       if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
         if (elementsRef.current.length === 0) return
         elementsRef.current = elementsRef.current.slice(0, -1)
-        scheduleRender()
-        scheduleSave()
+        scheduleRender(); scheduleSave()
       }
     }
     window.addEventListener('keydown', onKey)
@@ -731,34 +857,26 @@ export default function WhiteboardEditor({
       const items   = Array.from(e.clipboardData?.items ?? [])
       const imgItem = items.find(it => it.type.startsWith('image/'))
       if (!imgItem) return
-      const file = imgItem.getAsFile()
-      if (!file) return
-
+      const file = imgItem.getAsFile(); if (!file) return
       const ext  = file.type.split('/')[1] || 'png'
       const path = `${boardId}/${uid()}.${ext}`
       const { data: uploaded, error } = await supabase.storage
-        .from('whiteboard-images')
-        .upload(path, file, { contentType: file.type })
-
+        .from('whiteboard-images').upload(path, file, { contentType: file.type })
       const url = (!error && uploaded)
         ? supabase.storage.from('whiteboard-images').getPublicUrl(path).data.publicUrl
         : URL.createObjectURL(file)
-
       const img = new Image()
       img.onload = () => {
         imgCache.current.set(url, img)
-        const canvas = canvasRef.current!
-        const v = viewRef.current
-        const vw    = canvas.width  / v.scale
-        const vh    = canvas.height / v.scale
+        const canvas = canvasRef.current!; const v = viewRef.current
+        const vw = canvas.width / v.scale, vh = canvas.height / v.scale
         const scale = Math.min(vw * 0.6 / img.width, vh * 0.6 / img.height, 1)
         const w = img.width * scale, h = img.height * scale
         const cx = (canvas.width  / 2 - v.tx) / v.scale
         const cy = (canvas.height / 2 - v.ty) / v.scale
-        const newEl: WBImage = { id: uid(), type: 'image', url, x: cx - w / 2, y: cy - h / 2, w, h }
+        const newEl: WBImage = { id: uid(), type: 'image', url, x: cx - w/2, y: cy - h/2, w, h }
         elementsRef.current = [...elementsRef.current, newEl]
-        scheduleRender()
-        scheduleSave()
+        scheduleRender(); scheduleSave()
       }
       img.src = url
     }
@@ -766,7 +884,7 @@ export default function WhiteboardEditor({
     return () => window.removeEventListener('paste', onPaste)
   }, [canEdit, boardId, scheduleRender, scheduleSave]) // eslint-disable-line
 
-  // ── Sync: pull latest canvas from server (on focus + every 15s) ──────────
+  // ── Sync: pull latest canvas ──────────────────────────────────────────────
   useEffect(() => {
     const pull = async () => {
       if (activePtsRef.current || resizeRef.current || dragRef.current) return
@@ -779,6 +897,7 @@ export default function WhiteboardEditor({
           for (const el of elementsRef.current) {
             if (el.type === 'image' && !imgCache.current.has(el.url)) {
               const img = new Image()
+              img.onload = () => scheduleRenderRef.current()
               img.src = el.url
               imgCache.current.set(el.url, img)
             }
@@ -789,91 +908,47 @@ export default function WhiteboardEditor({
     }
     window.addEventListener('focus', pull)
     const interval = setInterval(pull, 15_000)
-    return () => {
-      window.removeEventListener('focus', pull)
-      clearInterval(interval)
-    }
+    return () => { window.removeEventListener('focus', pull); clearInterval(interval) }
   }, [boardId, scheduleRender])
-
-  // ── Commit text input ─────────────────────────────────────────────────────
-  const commitText = useCallback(() => {
-    const trimmed = textInput.replace(/^\n+|\n+$/g, '') // strip leading/trailing newlines only
-    if (!textPos || !trimmed) {
-      setTextPos(null); setTextEditId(null); return
-    }
-    if (textEditId) {
-      // Update existing element in place
-      elementsRef.current = elementsRef.current.map(el =>
-        el.id === textEditId && el.type === 'text'
-          ? { ...el, text: trimmed, color: textColor, size: textSize, bold: textBold, italic: textItalic }
-          : el
-      )
-    } else {
-      const newEl: TextEl = {
-        id: uid(), type: 'text',
-        text: trimmed,
-        x: textPos.wx, y: textPos.wy,
-        color: textColor, size: textSize,
-        bold: textBold, italic: textItalic,
-      }
-      elementsRef.current = [...elementsRef.current, newEl]
-    }
-    setTextPos(null)
-    setTextEditId(null)
-    setTextInput('')
-    scheduleRender()
-    scheduleSave()
-  }, [textPos, textInput, textEditId, textColor, textSize, textBold, textItalic, scheduleRender, scheduleSave])
 
   // ── Board name save ───────────────────────────────────────────────────────
   const saveName = useCallback(async (name: string) => {
     if (!isOwner) return
     await fetch(`/api/whiteboards/${boardId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
     })
   }, [boardId, isOwner])
 
-  // ── Sharing ───────────────────────────────────────────────────────────────
+  // ── Sharing helpers ───────────────────────────────────────────────────────
   const loadShares = useCallback(async () => {
     setShareError(null)
     try {
       const res  = await fetch(`/api/whiteboards/${boardId}/share`)
       const data = await res.json()
-      if (Array.isArray(data)) {
-        setShares(data)
-      } else {
-        setShareError(data?.error || 'Failed to load shares')
-      }
-    } catch {
-      setShareError('Network error')
-    }
+      if (Array.isArray(data)) setShares(data)
+      else setShareError(data?.error || 'Failed to load shares')
+    } catch { setShareError('Network error') }
   }, [boardId])
 
   const doShare = useCallback(async () => {
     if (shareTarget.size === 0) return
     setSharing(true)
     await fetch(`/api/whiteboards/${boardId}/share`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ studentIds: [...shareTarget], accessLevel: shareAccess }),
     })
-    await loadShares()
-    setShareTarget(new Set())
-    setSharing(false)
+    await loadShares(); setShareTarget(new Set()); setSharing(false)
   }, [boardId, shareTarget, shareAccess, loadShares])
 
   const revokeShare = useCallback(async (shareId: string) => {
-    // Find the boardId for this share
     await fetch(`/api/whiteboards/${boardId}/share?shareId=${shareId}`, { method: 'DELETE' })
     await loadShares()
   }, [boardId, loadShares])
 
   const changeAccess = useCallback(async (shareId: string, level: 'view'|'edit') => {
     await fetch(`/api/whiteboards/${boardId}/share`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ shareId, accessLevel: level }),
     })
     setShares(prev => prev.map(s => s.id === shareId ? { ...s, access_level: level } : s))
@@ -882,36 +957,44 @@ export default function WhiteboardEditor({
   const shareWithTeacher = useCallback(async () => {
     setSharing(true)
     await fetch(`/api/whiteboards/${boardId}/share`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ withTeacher: true }),
     })
-    await loadShares()
-    setSharing(false)
+    await loadShares(); setSharing(false)
   }, [boardId, loadShares])
 
-  // ── Cursor ────────────────────────────────────────────────────────────────
-  const cursor = isSpaceRef.current || tool === 'pan' ? 'grab'
-    : tool === 'select'  ? 'default'
-    : tool === 'text'    ? 'text'
-    : tool === 'eraser'  ? 'cell'
-    : 'crosshair'
-
-  // ── Zoom buttons ──────────────────────────────────────────────────────────
   const zoom = (delta: number) => {
-    const canvas = canvasRef.current
-    if (!canvas) return
+    const canvas = canvasRef.current; if (!canvas) return
     const cx = canvas.width / 2, cy = canvas.height / 2
     const v  = viewRef.current
     const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, v.scale * delta))
     const ratio    = newScale / v.scale
-    viewRef.current = { scale: newScale, tx: cx - ratio * (cx - v.tx), ty: cy - ratio * (cy - v.ty) }
+    viewRef.current = { scale: newScale, tx: cx - ratio*(cx - v.tx), ty: cy - ratio*(cy - v.ty) }
     scheduleRender()
   }
   const resetView = () => { viewRef.current = { tx: 0, ty: 0, scale: 1 }; scheduleRender() }
 
-  // Re-render when tool/color changes
   useEffect(() => { scheduleRender() }, [tool, color, hlColor, thickness, scheduleRender])
+
+  const cursor = isSpaceRef.current || tool === 'pan' ? 'grab'
+    : tool === 'select'  ? 'default'
+    : tool === 'text'    ? 'crosshair'
+    : tool === 'eraser'  ? 'cell'
+    : 'crosshair'
+
+  // ── Compute in-place editor screen position ────────────────────────────────
+  const editorScreenPos = (() => {
+    if (!textEditing || !canvasRef.current) return null
+    const rect = canvasRef.current.getBoundingClientRect()
+    const v    = viewRef.current
+    const [sx, sy] = worldToScreen(textEditing.wx, textEditing.wy, v)
+    return {
+      left:   rect.left  + sx,
+      top:    rect.top   + sy - textEditing.size * v.scale,
+      width:  textEditing.w > 0 ? textEditing.w * v.scale : undefined,
+      scale:  v.scale,
+    }
+  })()
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -928,14 +1011,11 @@ export default function WhiteboardEditor({
         </a>
 
         {isOwner ? (
-          <input
-            value={boardName}
-            onChange={e => setBoardName(e.target.value)}
+          <input value={boardName} onChange={e => setBoardName(e.target.value)}
             onBlur={e => saveName(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur() }}
             className="font-semibold text-sm bg-transparent border-b outline-none min-w-0 flex-1 max-w-xs"
-            style={{ color: 'var(--foreground)', borderColor: 'var(--border)' }}
-          />
+            style={{ color: 'var(--foreground)', borderColor: 'var(--border)' }} />
         ) : (
           <span className="font-semibold text-sm flex-1 truncate max-w-xs" style={{ color: 'var(--foreground)' }}>
             {boardName}
@@ -952,12 +1032,10 @@ export default function WhiteboardEditor({
 
         <div className="flex-1" />
 
-        {/* Zoom controls */}
         <div className="hidden sm:flex items-center gap-1 flex-shrink-0">
           <button onClick={() => zoom(0.8)} className="w-7 h-7 rounded-lg border text-sm flex items-center justify-center"
             style={{ borderColor: 'var(--border)', color: 'var(--foreground)' }}>−</button>
-          <button onClick={resetView}
-            className="text-xs px-2 py-1 rounded-lg border min-w-[48px] text-center"
+          <button onClick={resetView} className="text-xs px-2 py-1 rounded-lg border min-w-[48px] text-center"
             style={{ borderColor: 'var(--border)', color: 'var(--foreground)' }}>
             {Math.round(viewRef.current.scale * 100)}%
           </button>
@@ -992,50 +1070,151 @@ export default function WhiteboardEditor({
           onPointerLeave={onPointerUp}
         />
 
-        {/* Text textarea overlay — position:fixed so overflow:hidden never clips it */}
-        {textPos && textClientXY.current && (
-          <textarea
-            ref={textInputRef}
-            value={textInput}
-            rows={Math.max(1, (textInput.match(/\n/g)?.length ?? 0) + 1)}
-            onChange={e => setTextInput(e.target.value)}
-            onFocus={() => { textFocusedRef.current = true }}
-            onBlur={() => { if (textFocusedRef.current) commitText() }}
-            onKeyDown={e => {
-              // Enter alone = commit; Shift+Enter = newline
-              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitText() }
-              if (e.key === 'Escape') { e.preventDefault(); setTextPos(null); setTextEditId(null); setTextInput('') }
-              if ((e.metaKey || e.ctrlKey) && e.key === 'b') { e.preventDefault(); setTextBold(b => !b) }
-              if ((e.metaKey || e.ctrlKey) && e.key === 'i') { e.preventDefault(); setTextItalic(i => !i) }
-            }}
-            style={{
-              position:   'fixed',
-              left:       textClientXY.current.x,
-              top:        textClientXY.current.y - textSize * viewRef.current.scale,
-              fontSize:   `${textSize * viewRef.current.scale}px`,
-              lineHeight: 1.3,
-              fontFamily: '-apple-system, sans-serif',
-              fontWeight: textBold   ? 'bold'   : 'normal',
-              fontStyle:  textItalic ? 'italic' : 'normal',
-              color:      textColor,
-              background: 'rgba(255,255,255,0.92)',
-              border:     `2px solid ${textEditId ? '#ea580c' : '#3b5bdb'}`,
-              borderRadius: 4,
-              padding:    '2px 6px',
-              outline:    'none',
-              minWidth:   150,
-              resize:     'none',
-              overflow:   'hidden',
-              caretColor: textColor,
-              boxShadow:  '0 2px 12px rgba(0,0,0,0.2)',
-              zIndex:     100,
-            }}
-            placeholder={textEditId ? 'Edit text… (Enter to save)' : 'Type here… (Enter to place, Shift+Enter for newline)'}
-          />
+        {/* ── In-place text editor + floating toolbar ──────────────────── */}
+        {textEditing && editorScreenPos && (
+          <>
+            {/* Floating toolbar — uses onMouseDown+preventDefault everywhere so
+                focus stays in the contenteditable */}
+            <div
+              onMouseDown={e => e.preventDefault()}
+              style={{
+                position: 'fixed',
+                left: Math.max(4, editorScreenPos.left),
+                top:  Math.max(TOPBAR_H + 4, editorScreenPos.top - 48),
+                display: 'flex', alignItems: 'center', gap: 2,
+                background: '#1f2937',
+                borderRadius: 10, padding: '4px 8px',
+                boxShadow: '0 4px 20px rgba(0,0,0,0.35)',
+                zIndex: 200, userSelect: 'none',
+              }}
+            >
+              {/* Bold */}
+              <button
+                onMouseDown={e => { e.preventDefault(); document.execCommand('bold') }}
+                title="Bold (⌘B)"
+                className="w-7 h-7 rounded flex items-center justify-center text-sm font-bold transition-colors hover:bg-white/20"
+                style={{ color: '#fff' }}>B</button>
+
+              {/* Italic */}
+              <button
+                onMouseDown={e => { e.preventDefault(); document.execCommand('italic') }}
+                title="Italic (⌘I)"
+                className="w-7 h-7 rounded flex items-center justify-center text-sm italic transition-colors hover:bg-white/20"
+                style={{ color: '#fff' }}>I</button>
+
+              {/* Underline */}
+              <button
+                onMouseDown={e => { e.preventDefault(); document.execCommand('underline') }}
+                title="Underline (⌘U)"
+                className="w-7 h-7 rounded flex items-center justify-center text-sm transition-colors hover:bg-white/20"
+                style={{ color: '#fff', textDecoration: 'underline' }}>U</button>
+
+              <div style={{ width: 1, height: 18, background: '#4b5563', margin: '0 3px' }} />
+
+              {/* Size decrease */}
+              <button
+                onMouseDown={e => {
+                  e.preventDefault()
+                  setTextEditing(prev => prev ? { ...prev, size: Math.max(8, prev.size - 2) } : null)
+                }}
+                title="Decrease size"
+                className="w-7 h-7 rounded flex items-center justify-center transition-colors hover:bg-white/20"
+                style={{ color: '#fff', fontSize: 11 }}>A−</button>
+
+              <span style={{ color: '#9ca3af', fontSize: 11, minWidth: 28, textAlign: 'center' }}>
+                {textEditing.size}
+              </span>
+
+              {/* Size increase */}
+              <button
+                onMouseDown={e => {
+                  e.preventDefault()
+                  setTextEditing(prev => prev ? { ...prev, size: Math.min(200, prev.size + 2) } : null)
+                }}
+                title="Increase size"
+                className="w-7 h-7 rounded flex items-center justify-center transition-colors hover:bg-white/20"
+                style={{ color: '#fff', fontSize: 11 }}>A+</button>
+
+              <div style={{ width: 1, height: 18, background: '#4b5563', margin: '0 3px' }} />
+
+              {/* Color swatches */}
+              {PEN_COLORS.slice(0, 7).map(c => (
+                <button
+                  key={c}
+                  onMouseDown={e => {
+                    e.preventDefault()
+                    setTextEditing(prev => prev ? { ...prev, color: c } : null)
+                    setTextColor(c)
+                  }}
+                  className="w-4 h-4 rounded-full flex-shrink-0 transition-transform hover:scale-110"
+                  style={{
+                    background: c,
+                    outline: textEditing.color === c ? '2px solid #60a5fa' : '2px solid transparent',
+                    outlineOffset: 1,
+                    boxShadow: c === '#ffffff' ? '0 0 0 1px #6b7280' : undefined,
+                  }}
+                />
+              ))}
+
+              <div style={{ width: 1, height: 18, background: '#4b5563', margin: '0 3px' }} />
+
+              {/* Commit */}
+              <button
+                onMouseDown={e => { e.preventDefault(); commitEdit() }}
+                title="Done (Enter)"
+                className="text-xs px-2 py-1 rounded font-medium transition-colors hover:bg-white/20"
+                style={{ color: '#60a5fa' }}>Done</button>
+            </div>
+
+            {/* The actual in-place contenteditable editor */}
+            <div
+              key={textEditing.key}
+              ref={editRef}
+              contentEditable
+              suppressContentEditableWarning
+              onKeyDown={e => {
+                if (e.key === 'Escape') { e.preventDefault(); setTextEditing(null); scheduleRender() }
+                // Enter alone = newline (natural browser behavior)
+                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); commitEdit() }
+                if ((e.metaKey || e.ctrlKey) && e.key === 'b') { e.preventDefault(); document.execCommand('bold') }
+                if ((e.metaKey || e.ctrlKey) && e.key === 'i') { e.preventDefault(); document.execCommand('italic') }
+                if ((e.metaKey || e.ctrlKey) && e.key === 'u') { e.preventDefault(); document.execCommand('underline') }
+              }}
+              onBlur={e => {
+                // Don't commit if focus moved to our toolbar (relatedTarget inside toolbar)
+                const related = e.relatedTarget as HTMLElement | null
+                if (related && related.closest('[data-wb-toolbar]')) return
+                commitEdit()
+              }}
+              style={{
+                position:   'fixed',
+                left:       editorScreenPos.left,
+                top:        editorScreenPos.top,
+                width:      editorScreenPos.width,
+                minWidth:   120,
+                minHeight:  textEditing.size * editorScreenPos.scale * 1.4,
+                fontSize:   `${textEditing.size * editorScreenPos.scale}px`,
+                lineHeight: 1.3,
+                fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+                color:      textEditing.color,
+                background: 'rgba(255,255,255,0.06)',
+                border:     '1.5px dashed #3b5bdb',
+                borderRadius: 4,
+                padding:    '2px 4px',
+                outline:    'none',
+                zIndex:     150,
+                caretColor: textEditing.color,
+                cursor:     'text',
+                whiteSpace: editorScreenPos.width ? 'pre-wrap' : 'pre',
+                wordBreak:  editorScreenPos.width ? 'break-word' : 'normal',
+                overflowWrap: editorScreenPos.width ? 'break-word' : 'normal',
+              }}
+            />
+          </>
         )}
       </div>
 
-      {/* ── Bottom toolbar ─────────────────────────────────────────────────── */}
+      {/* ── Bottom toolbar ────────────────────────────────────────────────── */}
       {canEdit && (
         <div className="flex-shrink-0 flex items-center justify-center gap-2 px-4 py-2 border-t flex-wrap"
           style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
@@ -1043,37 +1222,16 @@ export default function WhiteboardEditor({
           {/* Tool buttons */}
           {([
             { id: 'select',      title: 'Select / move / resize',
-              icon: (
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 15l-7-7m0 0h5m-5 0v5" />
-                </svg>
-              )},
+              icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 15l-7-7m0 0h5m-5 0v5" /></svg> },
             { id: 'pan',         title: 'Pan (or hold Space)',
-              icon: (
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 11.5V14m0-2.5v-6a1.5 1.5 0 113 0m-3 6a1.5 1.5 0 00-3 0v2a7.5 7.5 0 0015 0v-5a1.5 1.5 0 00-3 0m-6-3V11m0-5.5v-1a1.5 1.5 0 013 0v1m0 0V11m0-5.5a1.5 1.5 0 013 0v3m0 0V11" />
-                </svg>
-              )},
+              icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 11.5V14m0-2.5v-6a1.5 1.5 0 113 0m-3 6a1.5 1.5 0 00-3 0v2a7.5 7.5 0 0015 0v-5a1.5 1.5 0 00-3 0m-6-3V11m0-5.5v-1a1.5 1.5 0 013 0v1m0 0V11m0-5.5a1.5 1.5 0 013 0v3m0 0V11" /></svg> },
             { id: 'pen',         title: 'Pen',
-              icon: (
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                </svg>
-              )},
+              icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg> },
             { id: 'highlighter', title: 'Highlighter',
-              icon: (
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                </svg>
-              )},
+              icon: <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg> },
             { id: 'eraser',      title: 'Eraser',
-              icon: (
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 20H7L3 16l10-10 7 7-3.5 3.5" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6.5 17.5l4-4" />
-                </svg>
-              )},
-            { id: 'text',        title: 'Text',
+              icon: <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 20H7L3 16l10-10 7 7-3.5 3.5" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6.5 17.5l4-4" /></svg> },
+            { id: 'text',        title: 'Text — click or drag to place',
               icon: <span className="text-sm font-bold">T</span> },
           ] as { id: Tool; title: string; icon: React.ReactNode }[]).map(t => (
             <button key={t.id} title={t.title} onClick={() => setTool(t.id)}
@@ -1089,7 +1247,7 @@ export default function WhiteboardEditor({
 
           <div className="w-px h-6 mx-1 flex-shrink-0" style={{ background: 'var(--border)' }} />
 
-          {/* Colors */}
+          {/* Color / size controls per tool */}
           {(tool === 'pen' || tool === 'eraser' || tool === 'select') && PEN_COLORS.map(c => (
             <button key={c} onClick={() => setColor(c)} title={c}
               className="w-6 h-6 rounded-full border-2 flex-shrink-0 transition-transform hover:scale-110"
@@ -1101,39 +1259,26 @@ export default function WhiteboardEditor({
           ))}
 
           {tool === 'highlighter' && HL_COLORS.map(c => (
-            <button key={c} onClick={() => setHlColor(c)} title={c}
+            <button key={c} onClick={() => setHlColor(c)}
               className="w-7 h-5 rounded border-2 flex-shrink-0"
               style={{ background: c, borderColor: hlColor === c ? 'var(--foreground)' : 'transparent' }} />
           ))}
 
+          {/* Text tool: default size + color for new boxes */}
           {tool === 'text' && (
             <>
-              {PEN_COLORS.slice(0, -1).map(c => (
+              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Default:</span>
+              {PEN_COLORS.slice(0, 7).map(c => (
                 <button key={c} onClick={() => setTextColor(c)}
-                  className="w-6 h-6 rounded-full border-2 flex-shrink-0"
+                  className="w-5 h-5 rounded-full border-2 flex-shrink-0"
                   style={{ background: c, borderColor: textColor === c ? 'var(--foreground)' : 'transparent' }} />
               ))}
               <select value={textSize} onChange={e => setTextSize(Number(e.target.value))}
                 className="text-xs rounded-lg border px-1 py-1"
                 style={{ borderColor: 'var(--border)', background: 'var(--background)', color: 'var(--foreground)' }}>
-                {[10,12,14,16,18,22,28,36,48,64].map(s => <option key={s} value={s}>{s}px</option>)}
+                {[8,10,12,14,16,18,22,28,36,48,64,96].map(s => <option key={s} value={s}>{s}px</option>)}
               </select>
-              {/* Bold */}
-              <button onClick={() => setTextBold(b => !b)} title="Bold (⌘B)"
-                className="w-9 h-9 rounded-xl border text-sm font-bold flex items-center justify-center"
-                style={{
-                  background:  textBold ? 'var(--accent)' : 'var(--background)',
-                  borderColor: textBold ? 'var(--accent)' : 'var(--border)',
-                  color:       textBold ? '#fff' : 'var(--foreground)',
-                }}>B</button>
-              {/* Italic */}
-              <button onClick={() => setTextItalic(i => !i)} title="Italic (⌘I)"
-                className="w-9 h-9 rounded-xl border text-sm italic flex items-center justify-center"
-                style={{
-                  background:  textItalic ? 'var(--accent)' : 'var(--background)',
-                  borderColor: textItalic ? 'var(--accent)' : 'var(--border)',
-                  color:       textItalic ? '#fff' : 'var(--foreground)',
-                }}>I</button>
+              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>· drag to set width</span>
             </>
           )}
 
@@ -1141,8 +1286,7 @@ export default function WhiteboardEditor({
             <div className="flex items-center gap-2 flex-shrink-0">
               <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Size</span>
               <input type="range" min={1} max={20} value={thickness}
-                onChange={e => setThickness(Number(e.target.value))}
-                className="w-20 accent-blue-600" />
+                onChange={e => setThickness(Number(e.target.value))} className="w-20 accent-blue-600" />
               <span className="text-xs w-4" style={{ color: 'var(--text-muted)' }}>{thickness}</span>
             </div>
           )}
@@ -1150,11 +1294,9 @@ export default function WhiteboardEditor({
           {tool === 'select' && selectedId && (
             <button
               onClick={() => {
-                elementsRef.current   = elementsRef.current.filter(el => el.id !== selectedId)
-                selectedIdRef.current = null
-                setSelectedId(null)
-                scheduleRender()
-                scheduleSave()
+                elementsRef.current = elementsRef.current.filter(el => el.id !== selectedId)
+                selectedIdRef.current = null; setSelectedId(null)
+                scheduleRender(); scheduleSave()
               }}
               className="text-xs px-2.5 py-1 rounded-lg border ml-2"
               style={{ borderColor: '#fca5a5', color: '#dc2626', background: '#fef2f2' }}>
@@ -1213,9 +1355,7 @@ export default function WhiteboardEditor({
                       <div key={s.id} className="flex items-center gap-3 px-3 py-2 rounded-xl"
                         style={{ background: 'var(--background)' }}>
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate" style={{ color: 'var(--foreground)' }}>
-                            {name}
-                          </p>
+                          <p className="text-sm font-medium truncate" style={{ color: 'var(--foreground)' }}>{name}</p>
                         </div>
                         <select value={s.access_level}
                           onChange={e => changeAccess(s.id, e.target.value as 'view'|'edit')}
@@ -1256,14 +1396,11 @@ export default function WhiteboardEditor({
                               e.target.checked ? next.add(st.id) : next.delete(st.id)
                               return next
                             })
-                          }}
-                          className="accent-blue-600" />
+                          }} className="accent-blue-600" />
                         <span className="text-sm flex-1 truncate" style={{ color: 'var(--foreground)' }}>
                           {st.full_name || st.email}
                         </span>
-                        {alreadyShared && (
-                          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Already shared</span>
-                        )}
+                        {alreadyShared && <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Already shared</span>}
                       </label>
                     )
                   })}
@@ -1273,8 +1410,7 @@ export default function WhiteboardEditor({
                     {shareTarget.size === 1 && (
                       <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
                         Access:
-                        <select value={shareAccess}
-                          onChange={e => setShareAccess(e.target.value as 'view'|'edit')}
+                        <select value={shareAccess} onChange={e => setShareAccess(e.target.value as 'view'|'edit')}
                           className="rounded-lg border px-2 py-1"
                           style={{ borderColor: 'var(--border)', background: 'var(--card)', color: 'var(--foreground)' }}>
                           <option value="view">View only</option>
@@ -1283,9 +1419,7 @@ export default function WhiteboardEditor({
                       </div>
                     )}
                     {shareTarget.size > 1 && (
-                      <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                        Multiple recipients → view only
-                      </span>
+                      <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Multiple → view only</span>
                     )}
                     <button onClick={doShare} disabled={sharing}
                       className="ml-auto text-sm px-4 py-2 rounded-xl font-medium text-white disabled:opacity-50"
@@ -1308,18 +1442,14 @@ export default function WhiteboardEditor({
                     Share with teacher
                   </p>
                   {alreadySharedWithTeacher ? (
-                    <div className="flex items-center gap-2 px-3 py-2 rounded-xl"
-                      style={{ background: 'var(--background)' }}>
+                    <div className="flex items-center gap-2 px-3 py-2 rounded-xl" style={{ background: 'var(--background)' }}>
                       <svg className="w-4 h-4 flex-shrink-0" style={{ color: '#16a34a' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                       </svg>
-                      <span className="text-sm" style={{ color: 'var(--foreground)' }}>
-                        Already shared with your teacher
-                      </span>
+                      <span className="text-sm" style={{ color: 'var(--foreground)' }}>Already shared with your teacher</span>
                     </div>
                   ) : (
-                    <button
-                      onClick={async () => { await shareWithTeacher(); setShowShare(false) }}
+                    <button onClick={async () => { await shareWithTeacher(); setShowShare(false) }}
                       disabled={sharing}
                       className="w-full py-2.5 rounded-xl font-medium text-white text-sm disabled:opacity-50"
                       style={{ background: 'var(--accent)' }}>
