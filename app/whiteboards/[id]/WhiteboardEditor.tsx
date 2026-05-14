@@ -58,6 +58,7 @@ const MIN_SCALE   = 0.1
 const MAX_SCALE   = 10
 const TOPBAR_H    = 52
 const HANDLE_PX   = 8
+const ERASER_RADIUS_PX = 14   // eraser radius in screen pixels
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -88,6 +89,60 @@ function simplify(pts: number[][], tol: number): number[][] {
     return [...l.slice(0, -1), ...r]
   }
   return [pts[0], pts[pts.length - 1]]
+}
+
+/** Chaikin corner-cutting smoothing. 2 passes gives a nice smooth curve. */
+function chaikin(pts: number[][], iterations = 2): number[][] {
+  if (pts.length <= 2) return pts
+  let result = pts
+  for (let iter = 0; iter < iterations; iter++) {
+    const next: number[][] = [result[0]]
+    for (let i = 0; i < result.length - 1; i++) {
+      const [x0, y0] = result[i], [x1, y1] = result[i + 1]
+      next.push([x0 * 0.75 + x1 * 0.25, y0 * 0.75 + y1 * 0.25])
+      next.push([x0 * 0.25 + x1 * 0.75, y0 * 0.25 + y1 * 0.75])
+    }
+    next.push(result[result.length - 1])
+    result = next
+  }
+  return result
+}
+
+/** Bounding box of a stroke (includes stroke half-width as padding). */
+function strokeBounds(stroke: Stroke) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (const [x, y] of stroke.pts) {
+    if (x < minX) minX = x; if (x > maxX) maxX = x
+    if (y < minY) minY = y; if (y > maxY) maxY = y
+  }
+  const pad = stroke.width / 2
+  return { x: minX - pad, y: minY - pad, w: maxX - minX + stroke.width, h: maxY - minY + stroke.width }
+}
+
+/** Point-to-segment distance hit test for a stroke. */
+function strokeHitTest(stroke: Stroke, wx: number, wy: number, threshold: number): boolean {
+  const b = strokeBounds(stroke)
+  // Quick bounding-box reject
+  if (wx < b.x - threshold || wx > b.x + b.w + threshold ||
+      wy < b.y - threshold || wy > b.y + b.h + threshold) return false
+  for (let i = 0; i < stroke.pts.length; i++) {
+    const [x1, y1] = stroke.pts[i]
+    if (i === stroke.pts.length - 1) {
+      if (Math.sqrt((wx - x1) ** 2 + (wy - y1) ** 2) <= threshold) return true
+      break
+    }
+    const [x2, y2] = stroke.pts[i + 1]
+    const ddx = x2 - x1, ddy = y2 - y1
+    const len2 = ddx * ddx + ddy * ddy
+    if (len2 === 0) {
+      if (Math.sqrt((wx - x1) ** 2 + (wy - y1) ** 2) <= threshold) return true
+    } else {
+      const t = Math.max(0, Math.min(1, ((wx - x1) * ddx + (wy - y1) * ddy) / len2))
+      const px = x1 + t * ddx, py = y1 + t * ddy
+      if (Math.sqrt((wx - px) ** 2 + (wy - py) ** 2) <= threshold) return true
+    }
+  }
+  return false
 }
 
 function fontStr(size: number, bold?: boolean, italic?: boolean) {
@@ -227,7 +282,11 @@ export default function WhiteboardEditor({
   const viewRef       = useRef<View>({ tx: 0, ty: 0, scale: 1 })
   const activePtsRef  = useRef<number[][] | null>(null)
   const selectedIdRef = useRef<string | null>(null)
-  const dragRef       = useRef<{ startWx: number; startWy: number; origX: number; origY: number } | null>(null)
+  const dragRef       = useRef<{
+    startWx: number; startWy: number
+    origX: number; origY: number
+    origPts?: number[][]   // stored original points for stroke dragging
+  } | null>(null)
   const resizeRef     = useRef<{
     handleIdx: number
     origBounds: { x: number; y: number; w: number; h: number }
@@ -239,6 +298,8 @@ export default function WhiteboardEditor({
   const isSpaceRef    = useRef(false)
   const touch1Ref     = useRef<{ id: number; x: number; y: number } | null>(null)
   const touch2Ref     = useRef<{ id: number; x: number; y: number; dist: number } | null>(null)
+  // Track unsaved local changes so sync-pull doesn't overwrite them
+  const dirtyRef      = useRef(false)
 
   // Text drag-to-create ref
   const textDragRef = useRef<{ startWx: number; startWy: number; endWx: number; endWy: number } | null>(null)
@@ -331,11 +392,15 @@ export default function WhiteboardEditor({
         for (let i = 1; i < el.pts.length; i++) ctx.lineTo(el.pts[i][0], el.pts[i][1])
         ctx.stroke()
         ctx.restore()
+        if (selId === el.id) {
+          const b = strokeBounds(el)
+          drawSelectionBox(ctx, b.x, b.y, b.w, b.h, false)
+        }
       } else if (el.type === 'image') {
         const img = imgCache.current.get(el.url)
         if (img?.complete && img.naturalWidth > 0) {
           ctx.drawImage(img, el.x, el.y, el.w, el.h)
-          if (selId === el.id) drawSelectionBox(ctx, el.x, el.y, el.w, el.h)
+          if (selId === el.id) drawSelectionBox(ctx, el.x, el.y, el.w, el.h, false)
         }
       } else if (el.type === 'text') {
         // Skip element being edited — contenteditable shows it
@@ -356,25 +421,43 @@ export default function WhiteboardEditor({
 
         if (selId === el.id) {
           const bounds = getElBounds(el, ctx)
-          drawSelectionBox(ctx, bounds.x, bounds.y, bounds.w, bounds.h)
+          // Show side handles (left/right) for text width resize
+          drawSelectionBox(ctx, bounds.x, bounds.y, bounds.w, bounds.h, true)
         }
         ctx.restore()
       }
     }
 
-    // Active drawing stroke
+    // Active drawing stroke (pen / highlighter) — Chaikin smoothed preview
     const pts = activePtsRef.current
-    if (pts && pts.length > 1) {
+    if (pts && pts.length > 1 && tool !== 'eraser') {
       const isHl = tool === 'highlighter'
+      // Apply 1 pass of Chaikin for a smoother live preview
+      const drawPts = pts.length >= 4 ? chaikin(pts, 1) : pts
       ctx.save()
       ctx.globalAlpha = isHl ? HL_OPACITY : 1
-      ctx.strokeStyle = isHl ? hlColor : (tool === 'eraser' ? '#ffffff' : color)
-      ctx.lineWidth   = isHl ? 24 : (tool === 'eraser' ? 28 : thickness)
+      ctx.strokeStyle = isHl ? hlColor : color
+      ctx.lineWidth   = isHl ? 24 : thickness
       ctx.lineCap = 'round'; ctx.lineJoin = 'round'
       ctx.beginPath()
-      ctx.moveTo(pts[0][0], pts[0][1])
-      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1])
+      ctx.moveTo(drawPts[0][0], drawPts[0][1])
+      for (let i = 1; i < drawPts.length; i++) ctx.lineTo(drawPts[i][0], drawPts[i][1])
       ctx.stroke()
+      ctx.restore()
+    }
+
+    // Eraser: show circular cursor at current position
+    if (tool === 'eraser' && pts && pts.length > 0) {
+      const [ex, ey] = pts[pts.length - 1]
+      const r = ERASER_RADIUS_PX / scale
+      ctx.save()
+      ctx.strokeStyle = '#9ca3af'
+      ctx.lineWidth = 1.5 / scale
+      ctx.setLineDash([4 / scale, 3 / scale])
+      ctx.beginPath()
+      ctx.arc(ex, ey, r, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.setLineDash([])
       ctx.restore()
     }
 
@@ -401,7 +484,13 @@ export default function WhiteboardEditor({
 
   useEffect(() => { scheduleRenderRef.current = scheduleRender }, ) // always current
 
-  function drawSelectionBox(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
+  // drawSelectionBox defined inside component so it can access viewRef.
+  // showSideHandles=true adds left + right mid-point handles for text width resize.
+  function drawSelectionBox(
+    ctx: CanvasRenderingContext2D,
+    x: number, y: number, w: number, h: number,
+    showSideHandles: boolean,
+  ) {
     const s  = viewRef.current.scale
     const hs = HANDLE_PX / s
     ctx.save()
@@ -417,6 +506,15 @@ export default function WhiteboardEditor({
     ]
     ctx.fillStyle = '#ffffff'; ctx.strokeStyle = '#3b5bdb'; ctx.lineWidth = 1 / s
     for (const [hx, hy] of corners) { ctx.fillRect(hx, hy, hs, hs); ctx.strokeRect(hx, hy, hs, hs) }
+    // Side handles for width resizing (text only)
+    if (showSideHandles) {
+      const midY = y + h / 2 - hs / 2
+      // Right handle (index 4)
+      const rxH = x + w + 4 - hs
+      ctx.fillRect(rxH, midY, hs, hs); ctx.strokeRect(rxH, midY, hs, hs)
+      // Left handle (index 5)
+      ctx.fillRect(x - 4, midY, hs, hs); ctx.strokeRect(x - 4, midY, hs, hs)
+    }
     ctx.restore()
   }
 
@@ -461,6 +559,7 @@ export default function WhiteboardEditor({
   // ── Auto-save ─────────────────────────────────────────────────────────────
   const scheduleSave = useCallback(() => {
     if (!canEdit) return
+    dirtyRef.current = true   // mark as having unsaved changes
     clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(async () => {
       setSaving(true)
@@ -471,6 +570,7 @@ export default function WhiteboardEditor({
           body: JSON.stringify({ canvas_json: json }),
         })
         if (!res.ok) console.error('Autosave failed:', await res.json())
+        else dirtyRef.current = false   // saved successfully
       } catch (err) { console.error('Autosave error:', err) }
       setSaving(false)
     }, AUTOSAVE_MS)
@@ -479,7 +579,11 @@ export default function WhiteboardEditor({
   // ── Hit testing ───────────────────────────────────────────────────────────
   const hitTest = useCallback((wx: number, wy: number): WBEl | null => {
     for (const el of [...elementsRef.current].reverse()) {
-      if (el.type === 'image') {
+      if (el.type === 'stroke') {
+        // Use screen-pixel threshold converted to world space
+        const threshold = (el.width / 2 + 4) / viewRef.current.scale
+        if (strokeHitTest(el, wx, wy, threshold)) return el
+      } else if (el.type === 'image') {
         if (wx >= el.x && wx <= el.x + el.w && wy >= el.y && wy <= el.y + el.h) return el
       } else if (el.type === 'text') {
         const canvas = canvasRef.current; if (!canvas) continue
@@ -491,6 +595,11 @@ export default function WhiteboardEditor({
     return null
   }, [])
 
+  // hitTestHandle returns:
+  //   0-3 = corner handles (TL, TR, BR, BL)
+  //   4   = right-side handle (text width increase)
+  //   5   = left-side handle (text width/position adjust)
+  //   -1  = no handle
   const hitTestHandle = useCallback((wx: number, wy: number, el: WBImage | TextEl): number => {
     const canvas = canvasRef.current; if (!canvas) return -1
     const ctx = canvas.getContext('2d')!
@@ -504,10 +613,19 @@ export default function WhiteboardEditor({
       const [hx, hy] = corners[i]
       if (wx >= hx && wx <= hx + hs && wy >= hy && wy <= hy + hs) return i
     }
+    // Side handles for text width resize
+    if (el.type === 'text') {
+      const midY = y + h / 2 - hs / 2
+      // Right (handle 4)
+      const rxH = x + w + 4 - hs
+      if (wx >= rxH && wx <= rxH + hs && wy >= midY && wy <= midY + hs) return 4
+      // Left (handle 5)
+      if (wx >= x - 4 && wx <= x - 4 + hs && wy >= midY && wy <= midY + hs) return 5
+    }
     return -1
   }, [])
 
-  const getCanvasXY = (e: React.PointerEvent | PointerEvent) => {
+  const getCanvasXY = (e: React.PointerEvent | PointerEvent | MouseEvent) => {
     const canvas = canvasRef.current!
     const rect = canvas.getBoundingClientRect()
     return [e.clientX - rect.left, e.clientY - rect.top] as [number, number]
@@ -589,8 +707,17 @@ export default function WhiteboardEditor({
       const hit = hitTest(wx, wy)
       if (hit) {
         selectedIdRef.current = hit.id; setSelectedId(hit.id)
-        const el = hit as WBImage | TextEl
-        dragRef.current = { startWx: wx, startWy: wy, origX: el.x, origY: el.y }
+        if (hit.type === 'stroke') {
+          // Store original points so drag is computed from start position
+          dragRef.current = {
+            startWx: wx, startWy: wy,
+            origX: 0, origY: 0,
+            origPts: hit.pts.map(p => [p[0], p[1]]),
+          }
+        } else {
+          const el = hit as WBImage | TextEl
+          dragRef.current = { startWx: wx, startWy: wy, origX: el.x, origY: el.y }
+        }
         e.currentTarget.setPointerCapture(e.pointerId)
       } else {
         selectedIdRef.current = null; setSelectedId(null)
@@ -599,19 +726,6 @@ export default function WhiteboardEditor({
     }
 
     if (tool === 'text') {
-      // Click on existing text → re-edit
-      const hit = hitTest(wx, wy)
-      if (hit && hit.type === 'text') {
-        setTextSize(hit.size); setTextColor(hit.color)
-        setTextEditing({
-          id: hit.id, wx: hit.x, wy: hit.y,
-          w: hit.w ?? 0,
-          html: textElToHtml(hit),
-          color: hit.color, size: hit.size,
-          key: Date.now(),
-        })
-        return
-      }
       // Start drag to define box width
       textDragRef.current = { startWx: wx, startWy: wy, endWx: wx, endWy: wy }
       e.currentTarget.setPointerCapture(e.pointerId)
@@ -642,11 +756,22 @@ export default function WhiteboardEditor({
       else if (handleIdx === 1) { y += dy; w += dx; h -= dy }
       else if (handleIdx === 2) { w += dx; h += dy }
       else if (handleIdx === 3) { x += dx; w -= dx; h += dy }
+      else if (handleIdx === 4) { w += dx }             // right side: widen
+      else if (handleIdx === 5) { x += dx; w -= dx }   // left side: shift + narrow
       w = Math.max(20, w); h = Math.max(20, h)
       elementsRef.current = elementsRef.current.map(el => {
         if (el.id !== selectedIdRef.current) return el
         if (el.type === 'image') return { ...el, x, y, w, h }
         if (el.type === 'text') {
+          if (handleIdx === 4) {
+            // Right side: just change w (reflow)
+            return { ...el, w: Math.max(40, origBounds.w + dx) }
+          }
+          if (handleIdx === 5) {
+            // Left side: shift x, adjust w
+            const newW = Math.max(40, origBounds.w - dx)
+            return { ...el, x: origBounds.x + 2 + (origBounds.w - newW), w: newW }
+          }
           const scaleH = h / Math.max(origBounds.h, 1)
           const newSize = Math.max(8, Math.round(origSize * scaleH))
           return { ...el, x, y: y + newSize, size: newSize }
@@ -657,10 +782,13 @@ export default function WhiteboardEditor({
     }
 
     if (dragRef.current && tool === 'select' && selectedIdRef.current) {
-      const { startWx, startWy, origX, origY } = dragRef.current
+      const { startWx, startWy, origX, origY, origPts } = dragRef.current
       const dx = wx - startWx, dy = wy - startWy
       elementsRef.current = elementsRef.current.map(el => {
         if (el.id !== selectedIdRef.current) return el
+        if (el.type === 'stroke' && origPts) {
+          return { ...el, pts: origPts.map(([px, py]) => [px + dx, py + dy]) }
+        }
         if (el.type === 'image' || el.type === 'text') return { ...el, x: origX + dx, y: origY + dy }
         return el
       })
@@ -672,8 +800,36 @@ export default function WhiteboardEditor({
       scheduleRender(); return
     }
 
-    if (activePtsRef.current) { activePtsRef.current.push([wx, wy]); scheduleRender() }
-  }, [tool, scheduleRender])
+    // Eraser: remove stroke elements under the eraser circle (not text/images)
+    if (tool === 'eraser' && activePtsRef.current) {
+      activePtsRef.current.push([wx, wy])
+      const eraserRadius = ERASER_RADIUS_PX / v.scale
+      let changed = false
+      const newEls = elementsRef.current.filter(el => {
+        if (el.type !== 'stroke') return true  // never erase text or images
+        if (strokeHitTest(el, wx, wy, eraserRadius)) { changed = true; return false }
+        return true
+      })
+      if (changed) {
+        elementsRef.current = newEls
+        scheduleSave()
+      }
+      scheduleRender()
+      return
+    }
+
+    // Pen / highlighter: push with min-distance filter for smoothness
+    if (activePtsRef.current) {
+      const prev = activePtsRef.current[activePtsRef.current.length - 1]
+      // Convert last world point to screen to measure screen-pixel distance
+      const [prevSx, prevSy] = worldToScreen(prev[0], prev[1], v)
+      const dsx = sx - prevSx, dsy = sy - prevSy
+      // Only add point if it moved at least 3 screen pixels (reduces jitter)
+      if (activePtsRef.current.length > 1 && dsx * dsx + dsy * dsy < 9) return
+      activePtsRef.current.push([wx, wy])
+      scheduleRender()
+    }
+  }, [tool, scheduleRender, scheduleSave])
 
   const onPointerUp = useCallback((e?: React.PointerEvent | { clientX?: number; clientY?: number }) => {
     if (isPanRef.current) { isPanRef.current = false; panStartRef.current = null; return }
@@ -684,7 +840,6 @@ export default function WhiteboardEditor({
     if (textDragRef.current) {
       const drag = textDragRef.current; textDragRef.current = null
       const dragW = Math.abs(drag.endWx - drag.startWx)
-      const dragH = Math.abs(drag.endWy - drag.startWy)
       const wx = Math.min(drag.startWx, drag.endWx)
       // y = top of drag rect + one line height as baseline
       const wy = Math.min(drag.startWy, drag.endWy) + textSize
@@ -700,33 +855,63 @@ export default function WhiteboardEditor({
     }
 
     const pts = activePtsRef.current; activePtsRef.current = null
+
+    // Eraser: just clear the circle preview — elements were already removed in onPointerMove
+    if (tool === 'eraser') { scheduleRender(); return }
+
     if (!pts || pts.length < 2) return
 
     const simplified = simplify(pts, 0.5 / viewRef.current.scale)
+    // Apply Chaikin smoothing to pen strokes (not highlighter — keep it blocky/natural)
+    const finalPts = tool === 'highlighter' ? simplified : chaikin(simplified, 2)
+
     const isHl = tool === 'highlighter'
     const newEl: Stroke = {
       id: uid(), type: 'stroke',
-      pts: simplified,
-      color: tool === 'eraser' ? '#ffffff' : (isHl ? hlColor : color),
-      width: isHl ? 24 : (tool === 'eraser' ? 28 : thickness),
+      pts: finalPts,
+      color: isHl ? hlColor : color,
+      width: isHl ? 24 : thickness,
       opacity: isHl ? HL_OPACITY : 1,
     }
     elementsRef.current = [...elementsRef.current, newEl]
     scheduleRender(); scheduleSave()
   }, [tool, color, hlColor, thickness, textSize, textColor, scheduleRender, scheduleSave])
 
-  // ── Wheel zoom ────────────────────────────────────────────────────────────
+  // ── Double-click: open text editor regardless of active tool ──────────────
+  const onDoubleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const [sx, sy] = getCanvasXY(e)
+    const [wx, wy] = screenToWorld(sx, sy, viewRef.current)
+    const hit = hitTest(wx, wy)
+    if (hit && hit.type === 'text') {
+      setTextSize(hit.size); setTextColor(hit.color)
+      setTextEditing({
+        id: hit.id, wx: hit.x, wy: hit.y,
+        w: hit.w ?? 0,
+        html: textElToHtml(hit),
+        color: hit.color, size: hit.size,
+        key: Date.now(),
+      })
+    }
+  }, [hitTest])
+
+  // ── Wheel: zoom on ctrl/pinch, pan in all directions otherwise ───────────
   useEffect(() => {
     const canvas = canvasRef.current; if (!canvas) return
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
-      const rect = canvas.getBoundingClientRect()
-      const mx = e.clientX - rect.left, my = e.clientY - rect.top
-      const v  = viewRef.current
-      const factor   = Math.exp(-e.deltaY * (e.ctrlKey ? 0.008 : 0.002))
-      const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, v.scale * factor))
-      const ratio    = newScale / v.scale
-      viewRef.current = { scale: newScale, tx: mx - ratio * (mx - v.tx), ty: my - ratio * (my - v.ty) }
+      const v = viewRef.current
+      if (e.ctrlKey) {
+        // Pinch-to-zoom (ctrl + wheel, or trackpad pinch)
+        const rect = canvas.getBoundingClientRect()
+        const mx = e.clientX - rect.left, my = e.clientY - rect.top
+        const factor   = Math.exp(-e.deltaY * 0.008)
+        const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, v.scale * factor))
+        const ratio    = newScale / v.scale
+        viewRef.current = { scale: newScale, tx: mx - ratio * (mx - v.tx), ty: my - ratio * (my - v.ty) }
+      } else {
+        // Two-finger scroll / mouse wheel → pan in all 4 directions
+        viewRef.current = { ...v, tx: v.tx - e.deltaX, ty: v.ty - e.deltaY }
+      }
       scheduleRender()
     }
     canvas.addEventListener('wheel', onWheel, { passive: false })
@@ -884,10 +1069,11 @@ export default function WhiteboardEditor({
     return () => window.removeEventListener('paste', onPaste)
   }, [canEdit, boardId, scheduleRender, scheduleSave]) // eslint-disable-line
 
-  // ── Sync: pull latest canvas ──────────────────────────────────────────────
+  // ── Sync: pull latest canvas (guarded by dirtyRef) ───────────────────────
   useEffect(() => {
     const pull = async () => {
-      if (activePtsRef.current || resizeRef.current || dragRef.current) return
+      // Don't pull while there are unsaved local changes — it would overwrite them
+      if (activePtsRef.current || resizeRef.current || dragRef.current || dirtyRef.current) return
       try {
         const res  = await fetch(`/api/whiteboards/${boardId}`)
         const data = await res.json()
@@ -979,7 +1165,7 @@ export default function WhiteboardEditor({
   const cursor = isSpaceRef.current || tool === 'pan' ? 'grab'
     : tool === 'select'  ? 'default'
     : tool === 'text'    ? 'crosshair'
-    : tool === 'eraser'  ? 'cell'
+    : tool === 'eraser'  ? 'none'   // we draw our own circle cursor
     : 'crosshair'
 
   // ── Compute in-place editor screen position ────────────────────────────────
@@ -1067,7 +1253,7 @@ export default function WhiteboardEditor({
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
-          onPointerLeave={onPointerUp}
+          onDoubleClick={onDoubleClick}
         />
 
         {/* ── In-place text editor + floating toolbar ──────────────────── */}
@@ -1076,6 +1262,7 @@ export default function WhiteboardEditor({
             {/* Floating toolbar — uses onMouseDown+preventDefault everywhere so
                 focus stays in the contenteditable */}
             <div
+              data-wb-toolbar
               onMouseDown={e => e.preventDefault()}
               style={{
                 position: 'fixed',
@@ -1161,7 +1348,7 @@ export default function WhiteboardEditor({
               {/* Commit */}
               <button
                 onMouseDown={e => { e.preventDefault(); commitEdit() }}
-                title="Done (Enter)"
+                title="Done (⌘Enter)"
                 className="text-xs px-2 py-1 rounded font-medium transition-colors hover:bg-white/20"
                 style={{ color: '#60a5fa' }}>Done</button>
             </div>
@@ -1221,15 +1408,15 @@ export default function WhiteboardEditor({
 
           {/* Tool buttons */}
           {([
-            { id: 'select',      title: 'Select / move / resize',
+            { id: 'select',      title: 'Select / move / resize (double-click text to edit)',
               icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 15l-7-7m0 0h5m-5 0v5" /></svg> },
-            { id: 'pan',         title: 'Pan (or hold Space)',
+            { id: 'pan',         title: 'Pan (or hold Space, or two-finger drag)',
               icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 11.5V14m0-2.5v-6a1.5 1.5 0 113 0m-3 6a1.5 1.5 0 00-3 0v2a7.5 7.5 0 0015 0v-5a1.5 1.5 0 00-3 0m-6-3V11m0-5.5v-1a1.5 1.5 0 013 0v1m0 0V11m0-5.5a1.5 1.5 0 013 0v3m0 0V11" /></svg> },
             { id: 'pen',         title: 'Pen',
               icon: <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg> },
             { id: 'highlighter', title: 'Highlighter',
               icon: <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg> },
-            { id: 'eraser',      title: 'Eraser',
+            { id: 'eraser',      title: 'Eraser (pen/highlighter only)',
               icon: <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 20H7L3 16l10-10 7 7-3.5 3.5" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6.5 17.5l4-4" /></svg> },
             { id: 'text',        title: 'Text — click or drag to place',
               icon: <span className="text-sm font-bold">T</span> },
