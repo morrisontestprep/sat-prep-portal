@@ -291,6 +291,7 @@ export default function WhiteboardEditor({
     handleIdx: number
     origBounds: { x: number; y: number; w: number; h: number }
     origSize: number
+    origPts?: number[][]   // for stroke point scaling
     startWx: number; startWy: number
   } | null>(null)
   const panStartRef   = useRef<{ mx: number; my: number; tx: number; ty: number } | null>(null)
@@ -300,6 +301,8 @@ export default function WhiteboardEditor({
   const touch2Ref     = useRef<{ id: number; x: number; y: number; dist: number } | null>(null)
   // Track unsaved local changes so sync-pull doesn't overwrite them
   const dirtyRef      = useRef(false)
+  // Track eraser cursor position for hover preview (even before click)
+  const eraserPosRef  = useRef<[number, number] | null>(null)
 
   // Text drag-to-create ref
   const textDragRef = useRef<{ startWx: number; startWy: number; endWx: number; endWy: number } | null>(null)
@@ -446,9 +449,10 @@ export default function WhiteboardEditor({
       ctx.restore()
     }
 
-    // Eraser: show circular cursor at current position
-    if (tool === 'eraser' && pts && pts.length > 0) {
-      const [ex, ey] = pts[pts.length - 1]
+    // Eraser: show circular cursor (uses eraserPosRef so visible even when hovering)
+    const eraserPos = eraserPosRef.current
+    if (tool === 'eraser' && eraserPos) {
+      const [ex, ey] = eraserPos
       const r = ERASER_RADIUS_PX / scale
       ctx.save()
       ctx.strokeStyle = '#9ca3af'
@@ -600,10 +604,19 @@ export default function WhiteboardEditor({
   //   4   = right-side handle (text width increase)
   //   5   = left-side handle (text width/position adjust)
   //   -1  = no handle
-  const hitTestHandle = useCallback((wx: number, wy: number, el: WBImage | TextEl): number => {
-    const canvas = canvasRef.current; if (!canvas) return -1
-    const ctx = canvas.getContext('2d')!
-    const { x, y, w, h } = getElBounds(el, ctx)
+  const hitTestHandle = useCallback((wx: number, wy: number, el: WBEl): number => {
+    let x: number, y: number, w: number, h: number
+    if (el.type === 'stroke') {
+      const b = strokeBounds(el)
+      x = b.x; y = b.y; w = b.w; h = b.h
+    } else if (el.type === 'image') {
+      x = el.x; y = el.y; w = el.w; h = el.h
+    } else {
+      const canvas = canvasRef.current; if (!canvas) return -1
+      const ctx = canvas.getContext('2d')!
+      const b = getElBounds(el, ctx)
+      x = b.x; y = b.y; w = b.w; h = b.h
+    }
     const hs = HANDLE_PX / viewRef.current.scale
     const corners = [
       [x - 4, y - 4], [x + w + 4 - hs, y - 4],
@@ -613,13 +626,11 @@ export default function WhiteboardEditor({
       const [hx, hy] = corners[i]
       if (wx >= hx && wx <= hx + hs && wy >= hy && wy <= hy + hs) return i
     }
-    // Side handles for text width resize
+    // Side handles for text width resize only
     if (el.type === 'text') {
       const midY = y + h / 2 - hs / 2
-      // Right (handle 4)
       const rxH = x + w + 4 - hs
       if (wx >= rxH && wx <= rxH + hs && wy >= midY && wy <= midY + hs) return 4
-      // Left (handle 5)
       if (wx >= x - 4 && wx <= x - 4 + hs && wy >= midY && wy <= midY + hs) return 5
     }
     return -1
@@ -689,14 +700,23 @@ export default function WhiteboardEditor({
     if (tool === 'select') {
       if (selectedIdRef.current) {
         const selEl = elementsRef.current.find(el => el.id === selectedIdRef.current)
-        if (selEl && (selEl.type === 'image' || selEl.type === 'text')) {
+        if (selEl) {
           const hIdx = hitTestHandle(wx, wy, selEl)
           if (hIdx >= 0) {
-            const ctx = canvasRef.current!.getContext('2d')!
+            let origBounds: { x: number; y: number; w: number; h: number }
+            let origPts: number[][] | undefined
+            if (selEl.type === 'stroke') {
+              origBounds = strokeBounds(selEl)
+              origPts = selEl.pts.map(p => [p[0], p[1]])
+            } else {
+              const ctx = canvasRef.current!.getContext('2d')!
+              origBounds = getElBounds(selEl, ctx)
+            }
             resizeRef.current = {
               handleIdx: hIdx,
-              origBounds: getElBounds(selEl, ctx),
+              origBounds,
               origSize: selEl.type === 'text' ? selEl.size : 0,
+              origPts,
               startWx: wx, startWy: wy,
             }
             e.currentTarget.setPointerCapture(e.pointerId)
@@ -761,6 +781,17 @@ export default function WhiteboardEditor({
       w = Math.max(20, w); h = Math.max(20, h)
       elementsRef.current = elementsRef.current.map(el => {
         if (el.id !== selectedIdRef.current) return el
+        if (el.type === 'stroke' && resizeRef.current?.origPts) {
+          // Scale all stroke points proportionally from origBounds → new bounds
+          const ob = origBounds
+          const obW = Math.max(1, ob.w), obH = Math.max(1, ob.h)
+          const newPts = resizeRef.current.origPts.map(([px, py]) => {
+            const relX = (px - ob.x) / obW
+            const relY = (py - ob.y) / obH
+            return [x + relX * w, y + relY * h]
+          })
+          return { ...el, pts: newPts }
+        }
         if (el.type === 'image') return { ...el, x, y, w, h }
         if (el.type === 'text') {
           if (handleIdx === 4) {
@@ -800,19 +831,23 @@ export default function WhiteboardEditor({
       scheduleRender(); return
     }
 
-    // Eraser: remove stroke elements under the eraser circle (not text/images)
-    if (tool === 'eraser' && activePtsRef.current) {
-      activePtsRef.current.push([wx, wy])
-      const eraserRadius = ERASER_RADIUS_PX / v.scale
-      let changed = false
-      const newEls = elementsRef.current.filter(el => {
-        if (el.type !== 'stroke') return true  // never erase text or images
-        if (strokeHitTest(el, wx, wy, eraserRadius)) { changed = true; return false }
-        return true
-      })
-      if (changed) {
-        elementsRef.current = newEls
-        scheduleSave()
+    // Eraser: always track position for cursor circle, render on every move
+    if (tool === 'eraser') {
+      eraserPosRef.current = [wx, wy]
+      if (activePtsRef.current) {
+        // Actively erasing — remove any stroke elements under the eraser circle
+        activePtsRef.current.push([wx, wy])
+        const eraserRadius = ERASER_RADIUS_PX / v.scale
+        let changed = false
+        const newEls = elementsRef.current.filter(el => {
+          if (el.type !== 'stroke') return true  // never erase text or images
+          if (strokeHitTest(el, wx, wy, eraserRadius)) { changed = true; return false }
+          return true
+        })
+        if (changed) {
+          elementsRef.current = newEls
+          scheduleSave()
+        }
       }
       scheduleRender()
       return
@@ -1253,6 +1288,9 @@ export default function WhiteboardEditor({
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
+          onPointerLeave={() => {
+            if (eraserPosRef.current) { eraserPosRef.current = null; scheduleRender() }
+          }}
           onDoubleClick={onDoubleClick}
         />
 
