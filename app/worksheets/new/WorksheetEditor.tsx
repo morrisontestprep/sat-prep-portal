@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/utils/supabase/client'
+import AddToWhiteboardModal from '@/components/AddToWhiteboardModal'
 
 type Question = { id: string; subject: string; domain: string; skill: string; difficulty: string }
 type Student = { id: string; full_name: string | null; email: string | null }
@@ -67,6 +68,11 @@ export default function WorksheetEditor({
   const [dueDate, setDueDate] = useState('')
   const [assigning, setAssigning] = useState(false)
   const [assignDone, setAssignDone] = useState(false)
+
+  // Add to Whiteboard selection
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [selectedQIds,  setSelectedQIds]  = useState<Set<string>>(new Set())
+  const [showWBModal,   setShowWBModal]   = useState(false)
 
   // Block manipulation
   const moveBlock = (idx: number, dir: -1 | 1) => {
@@ -206,6 +212,18 @@ export default function WorksheetEditor({
             {questionCount} question{questionCount !== 1 ? 's' : ''}
           </span>
           <button
+            onClick={() => {
+              setSelectionMode(s => { if (s) setSelectedQIds(new Set()); return !s })
+            }}
+            className="px-3 py-1.5 rounded-lg text-sm border"
+            style={{
+              borderColor: selectionMode ? 'var(--accent)' : 'var(--border)',
+              color:       selectionMode ? 'var(--accent)' : 'var(--text-muted)',
+              background:  selectionMode ? 'var(--accent-light)' : 'transparent',
+            }}>
+            {selectionMode ? 'Cancel' : 'Select'}
+          </button>
+          <button
             onClick={handleSave}
             disabled={saving}
             className="px-3 py-1.5 rounded-lg text-sm border disabled:opacity-50"
@@ -297,7 +315,21 @@ export default function WorksheetEditor({
               {/* Question block */}
               {block.type === 'question' && (
                 <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl border"
-                  style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
+                  style={{ background: 'var(--card)', borderColor: selectionMode && selectedQIds.has(block.question.id) ? 'var(--accent)' : 'var(--border)' }}>
+                  {selectionMode && (
+                    <input
+                      type="checkbox"
+                      checked={selectedQIds.has(block.question.id)}
+                      onChange={() => setSelectedQIds(prev => {
+                        const next = new Set(prev)
+                        if (next.has(block.question.id)) next.delete(block.question.id)
+                        else next.add(block.question.id)
+                        return next
+                      })}
+                      className="w-4 h-4 flex-shrink-0 cursor-pointer"
+                      style={{ accentColor: 'var(--accent)' }}
+                    />
+                  )}
                   {/* Position number */}
                   <span className="w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-medium"
                     style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
@@ -313,6 +345,40 @@ export default function WorksheetEditor({
           ))}
         </div>
       </div>
+
+      {/* -- Add to Whiteboard floating action bar --------------------------- */}
+      {selectionMode && selectedQIds.size > 0 && (
+        <div
+          className="fixed bottom-6 left-1/2 z-50 flex items-center gap-3 px-5 py-3 rounded-2xl shadow-2xl"
+          style={{ transform: 'translateX(-50%)', background: 'var(--card)', border: '1px solid var(--border)' }}>
+          <span className="text-sm font-medium" style={{ color: 'var(--foreground)' }}>
+            {selectedQIds.size} question{selectedQIds.size !== 1 ? 's' : ''} selected
+          </span>
+          <button
+            onClick={() => setShowWBModal(true)}
+            className="px-4 py-2 rounded-xl text-sm font-medium text-white flex items-center gap-2"
+            style={{ background: 'var(--accent)' }}>
+            Add to Whiteboard
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+            </svg>
+          </button>
+        </div>
+      )}
+
+      {/* -- Add to Whiteboard modal ---------------------------------------- */}
+      {showWBModal && (
+        <AddToWhiteboardModal
+          questions={
+            blocks
+              .filter((b): b is Extract<Block, { type: 'question' }> =>
+                b.type === 'question' && selectedQIds.has(b.question.id))
+              .map(b => ({ id: b.question.id, imageUrl: null }))
+          }
+          worksheetTitle={title}
+          onClose={() => setShowWBModal(false)}
+        />
+      )}
 
       {/* Assign modal */}
       {showAssign && (
