@@ -243,26 +243,46 @@ function StudentCard({
     <div className="rounded-2xl border overflow-hidden group"
       style={{ background: 'var(--card)', borderColor: 'var(--border)' }}>
 
-      {/* Student header row */}
+      {/* Student header — two-row layout */}
       <div
-        className="px-6 py-4 flex items-center justify-between gap-4 cursor-pointer select-none"
+        className="px-6 pt-4 pb-3 flex flex-col gap-2.5 cursor-pointer select-none"
         onClick={() => assignments.length > 0 && setExpanded(e => !e)}
         style={{ userSelect: 'none' }}
       >
-        <div className="flex items-center gap-4 min-w-0">
-          <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 text-sm font-semibold text-white"
-            style={{ background: 'var(--accent)' }}>
-            {(student.full_name || student.email || '?').charAt(0).toUpperCase()}
+        {/* Row 1: avatar + name/email + Analytics + delete */}
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 text-sm font-semibold text-white"
+              style={{ background: 'var(--accent)' }}>
+              {(student.full_name || student.email || '?').charAt(0).toUpperCase()}
+            </div>
+            <div className="min-w-0">
+              <p className="font-semibold text-sm" style={{ color: 'var(--foreground)' }}>
+                {student.full_name || 'No name'}
+              </p>
+              <p className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>{student.email}</p>
+            </div>
           </div>
-          <div className="min-w-0">
-            <p className="font-semibold text-sm truncate" style={{ color: 'var(--foreground)' }}>
-              {student.full_name || 'No name'}
-            </p>
-            <p className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>{student.email}</p>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <Link href={`/students/${student.id}/analytics`} onClick={e => e.stopPropagation()}
+              className="text-xs px-2.5 py-1 rounded-lg font-medium"
+              style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
+              Analytics
+            </Link>
+            <button onClick={e => { e.stopPropagation(); setShowDeleteConfirm(true) }}
+              title="Remove student"
+              className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+              style={{ background: '#fef2f2', color: '#ef4444' }}>
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+            </button>
           </div>
         </div>
 
-        <div className="flex items-center gap-3 flex-shrink-0">
+        {/* Row 2: action buttons + stats + joined + chevron (indented to align under name) */}
+        <div className="flex items-center gap-2 flex-wrap" style={{ marginLeft: 52 }}>
           {/* Master File button */}
           <button
             onClick={e => { e.stopPropagation(); setShowMasterFile(true) }}
@@ -311,22 +331,21 @@ function StudentCard({
           </button>
 
           {/* Stats badges */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs px-2 py-0.5 rounded-full"
-              style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
-              {assignments.length} assigned
+          <span className="text-xs px-2 py-0.5 rounded-full"
+            style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
+            {assignments.length} assigned
+          </span>
+          {completedCount > 0 && (
+            <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: '#f0fdf4', color: '#16a34a' }}>
+              {completedCount} complete
             </span>
-            {completedCount > 0 && (
-              <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: '#f0fdf4', color: '#16a34a' }}>
-                {completedCount} complete
-              </span>
-            )}
-            {pendingCount > 0 && (
-              <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: '#fffbeb', color: '#d97706' }}>
-                {pendingCount} pending
-              </span>
-            )}
-          </div>
+          )}
+          {pendingCount > 0 && (
+            <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: '#fffbeb', color: '#d97706' }}>
+              {pendingCount} pending
+            </span>
+          )}
+
           <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Joined {joinedDate}</span>
 
           {assignments.length > 0 && (
@@ -336,22 +355,6 @@ function StudentCard({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
             </svg>
           )}
-
-          <Link href={`/students/${student.id}/analytics`} onClick={e => e.stopPropagation()}
-            className="text-xs px-2.5 py-1 rounded-lg font-medium flex-shrink-0"
-            style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
-            Analytics
-          </Link>
-
-          <button onClick={e => { e.stopPropagation(); setShowDeleteConfirm(true) }}
-            title="Remove student"
-            className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
-            style={{ background: '#fef2f2', color: '#ef4444' }}>
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-            </svg>
-          </button>
         </div>
       </div>
 
