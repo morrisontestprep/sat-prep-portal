@@ -625,7 +625,7 @@ export default function WhiteboardEditor({
     return -1
   }, [])
 
-  const getCanvasXY = (e: React.PointerEvent | PointerEvent | MouseEvent) => {
+  const getCanvasXY = (e: React.PointerEvent | React.MouseEvent | PointerEvent | MouseEvent) => {
     const canvas = canvasRef.current!
     const rect = canvas.getBoundingClientRect()
     return [e.clientX - rect.left, e.clientY - rect.top] as [number, number]
