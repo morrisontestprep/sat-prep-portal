@@ -1014,28 +1014,47 @@ function AnalyzeDrawer({
                 </a>
               </div>
             ) : (
-              <div className="space-y-1.5 max-h-64 overflow-y-auto">
-                {whiteboards.map(wb => (
-                  <button
-                    key={wb.id}
-                    onClick={() => addToWhiteboard(wb.id, wb.name)}
-                    disabled={addingToWb}
-                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left transition-colors disabled:opacity-50 hover:opacity-80"
-                    style={{ background: 'var(--background)', borderColor: 'var(--border)' }}>
-                    <div className="w-7 h-7 rounded-lg flex-shrink-0 flex items-center justify-center"
-                      style={{ background: 'var(--accent-light)' }}>
-                      <svg className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                          d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                      </svg>
-                    </div>
-                    <span className="text-sm font-medium truncate" style={{ color: 'var(--foreground)' }}>
-                      {wb.name}
-                    </span>
-                    {addingToWb && <div className="w-4 h-4 border-2 rounded-full animate-spin ml-auto flex-shrink-0"
-                      style={{ borderColor: 'var(--border)', borderTopColor: 'var(--accent)' }} />}
-                  </button>
-                ))}
+              <div className="space-y-1.5">
+                <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                  {whiteboards.map(wb => (
+                    <button
+                      key={wb.id}
+                      onClick={() => addToWhiteboard(wb.id, wb.name)}
+                      disabled={addingToWb}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left transition-colors disabled:opacity-50 hover:opacity-80"
+                      style={{ background: 'var(--background)', borderColor: 'var(--border)' }}>
+                      <div className="w-7 h-7 rounded-lg flex-shrink-0 flex items-center justify-center"
+                        style={{ background: 'var(--accent-light)' }}>
+                        <svg className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                            d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                        </svg>
+                      </div>
+                      <span className="text-sm font-medium truncate" style={{ color: 'var(--foreground)' }}>
+                        {wb.name}
+                      </span>
+                      {addingToWb && <div className="w-4 h-4 border-2 rounded-full animate-spin ml-auto flex-shrink-0"
+                        style={{ borderColor: 'var(--border)', borderTopColor: 'var(--accent)' }} />}
+                    </button>
+                  ))}
+                </div>
+                {/* Always offer to create a new whiteboard */}
+                <div className="flex items-center gap-2 pt-1">
+                  <div className="flex-1 h-px" style={{ background: 'var(--border)' }} />
+                  <span className="text-xs flex-shrink-0" style={{ color: 'var(--text-muted)' }}>or</span>
+                  <div className="flex-1 h-px" style={{ background: 'var(--border)' }} />
+                </div>
+                <a
+                  href="/whiteboards/new"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center justify-center gap-1.5 w-full px-3 py-2 rounded-xl border text-sm font-medium transition-colors"
+                  style={{ borderColor: 'var(--border)', color: 'var(--accent)', background: 'var(--accent-light)' }}>
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                  Create new whiteboard
+                </a>
               </div>
             )}
           </div>

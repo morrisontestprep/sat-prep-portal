@@ -602,6 +602,30 @@ export default function WorksheetView({
                 }}>
                 {selectionMode ? 'Cancel' : 'Select'}
               </button>
+              {selectionMode && (() => {
+                const allQIds = blocks
+                  .filter((b): b is Extract<Block, { type: 'question' }> => b.type === 'question')
+                  .map(b => b.question.id)
+                const allSelected = allQIds.length > 0 && allQIds.every(id => selectedQIds.has(id))
+                return (
+                  <button
+                    onClick={() => {
+                      if (allSelected) {
+                        setSelectedQIds(new Set())
+                      } else {
+                        setSelectedQIds(new Set(allQIds))
+                      }
+                    }}
+                    className="px-3 py-1.5 rounded-lg text-sm border"
+                    style={{
+                      borderColor: 'var(--border)',
+                      color:       'var(--text-muted)',
+                      background:  'transparent',
+                    }}>
+                    {allSelected ? 'Deselect All' : 'Select All'}
+                  </button>
+                )
+              })()}
               <button onClick={save} disabled={saving}
                 className="px-3 py-1.5 rounded-lg text-sm border disabled:opacity-50"
                 style={{ borderColor: 'var(--border)', color: 'var(--foreground)' }}>
