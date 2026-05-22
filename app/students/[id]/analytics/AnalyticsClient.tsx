@@ -602,7 +602,7 @@ function AnalyzeDrawer({
   const toggleSelect = (qid: string) => {
     setSelected(prev => {
       const next = new Set(prev)
-      if (next.has(qid)) next.delete(qid) else next.add(qid)
+      if (next.has(qid)) { next.delete(qid) } else { next.add(qid) }
       return next
     })
   }
