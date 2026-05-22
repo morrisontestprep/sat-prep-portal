@@ -531,13 +531,27 @@ export default function WhiteboardEditor({
   useEffect(() => {
     const resize = () => {
       const canvas = canvasRef.current; if (!canvas) return
-      canvas.width  = window.innerWidth
-      canvas.height = window.innerHeight - TOPBAR_H
+      // Use the canvas's actual CSS layout size (from its parent flex container)
+      // rather than window.innerWidth to avoid any horizontal squishing caused
+      // by the CSS width differing from the window width (e.g., due to scrollbars
+      // or flex constraints).
+      const parent = canvas.parentElement
+      const w = parent ? parent.clientWidth  : window.innerWidth
+      const h = parent ? parent.clientHeight : window.innerHeight - TOPBAR_H
+      canvas.width  = w
+      canvas.height = h
       scheduleRender()
     }
     resize()
+    // ResizeObserver is more accurate than window resize for flex containers
+    const observer = new ResizeObserver(resize)
+    const parent = canvasRef.current?.parentElement
+    if (parent) observer.observe(parent)
     window.addEventListener('resize', resize)
-    return () => window.removeEventListener('resize', resize)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', resize)
+    }
   }, [scheduleRender])
 
   // ── Sync textEditing → ref so render can skip edited element ──────────────
@@ -1089,9 +1103,16 @@ export default function WhiteboardEditor({
       img.onload = () => {
         imgCache.current.set(url, img)
         const canvas = canvasRef.current!; const v = viewRef.current
+        // Use naturalWidth/naturalHeight — the true pixel dimensions of the image —
+        // to avoid any browser scaling that could distort the aspect ratio.
+        const imgW = img.naturalWidth  || img.width
+        const imgH = img.naturalHeight || img.height
         const vw = canvas.width / v.scale, vh = canvas.height / v.scale
-        const scale = Math.min(vw * 0.6 / img.width, vh * 0.6 / img.height, 1)
-        const w = img.width * scale, h = img.height * scale
+        // Fit the image so it fills ≤60% of the visible viewport in each dimension,
+        // but never scale UP (cap at 1.0).  Both axes share the same scale factor
+        // so the original aspect ratio is always preserved.
+        const scale = Math.min(vw * 0.6 / imgW, vh * 0.6 / imgH, 1)
+        const w = imgW * scale, h = imgH * scale
         const cx = (canvas.width  / 2 - v.tx) / v.scale
         const cy = (canvas.height / 2 - v.ty) / v.scale
         const newEl: WBImage = { id: uid(), type: 'image', url, x: cx - w/2, y: cy - h/2, w, h }

@@ -535,6 +535,8 @@ function TrueImprovementPanel({ answers }: { answers: UnifiedAnswer[] }) {
 
 // ─── Analyze Drawer ───────────────────────────────────────────────────────────
 
+type Whiteboard = { id: string; name: string }
+
 function AnalyzeDrawer({
   answers,
   onClose,
@@ -542,8 +544,17 @@ function AnalyzeDrawer({
   answers: UnifiedAnswer[]
   onClose: () => void
 }) {
-  const [correctness, setCorrectness] = useState<'all' | 'correct' | 'wrong'>('all')
-  const [expanded, setExpanded]       = useState<string | null>(null)
+  const [correctness,    setCorrectness]    = useState<'all' | 'correct' | 'wrong'>('all')
+  const [diffFilter,     setDiffFilter]     = useState<string | null>(null)
+  const [domainFilter,   setDomainFilter]   = useState<string | null>(null)
+  const [skillFilter,    setSkillFilter]    = useState<string | null>(null)
+  const [expanded,       setExpanded]       = useState<string | null>(null)
+  const [selected,       setSelected]       = useState<Set<string>>(new Set())
+  const [showWbPicker,   setShowWbPicker]   = useState(false)
+  const [whiteboards,    setWhiteboards]    = useState<Whiteboard[]>([])
+  const [loadingWbs,     setLoadingWbs]     = useState(false)
+  const [addingToWb,     setAddingToWb]     = useState(false)
+  const [wbSuccess,      setWbSuccess]      = useState<string | null>(null)
 
   // Group by question_id — keep all attempts; show summary + attempts list
   const grouped = useMemo(() => {
@@ -560,12 +571,136 @@ function AnalyzeDrawer({
     return Array.from(map.values())
   }, [answers])
 
+  // Available filter options derived from grouped questions
+  const availableDiffs = useMemo(() =>
+    [...new Set(grouped.map(g => g.meta.difficulty).filter((d): d is string => !!d))].sort(),
+    [grouped]
+  )
+  const availableDomains = useMemo(() =>
+    [...new Set(grouped.map(g => g.meta.domain).filter((d): d is string => !!d))].sort(),
+    [grouped]
+  )
+  const availableSkills = useMemo(() =>
+    domainFilter
+      ? [...new Set(grouped.filter(g => g.meta.domain === domainFilter).map(g => g.meta.skill).filter((s): s is string => !!s))].sort()
+      : [],
+    [grouped, domainFilter]
+  )
+
   const filtered = grouped.filter(g => {
-    if (correctness === 'all') return true
-    const lastAttempt = g.attempts[g.attempts.length - 1]
-    if (correctness === 'correct') return lastAttempt.is_correct === true
-    return lastAttempt.is_correct !== true
+    if (correctness !== 'all') {
+      const lastAttempt = g.attempts[g.attempts.length - 1]
+      if (correctness === 'correct' && lastAttempt.is_correct !== true) return false
+      if (correctness === 'wrong'   && lastAttempt.is_correct === true)  return false
+    }
+    if (diffFilter   && g.meta.difficulty !== diffFilter)   return false
+    if (domainFilter && g.meta.domain     !== domainFilter)  return false
+    if (skillFilter  && g.meta.skill      !== skillFilter)   return false
+    return true
   })
+
+  const toggleSelect = (qid: string) => {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(qid)) next.delete(qid) else next.add(qid)
+      return next
+    })
+  }
+  const toggleSelectAll = () => {
+    if (selected.size === filtered.length) {
+      setSelected(new Set())
+    } else {
+      setSelected(new Set(filtered.map(g => g.meta.question_id)))
+    }
+  }
+
+  const openWbPicker = async () => {
+    setShowWbPicker(true)
+    setLoadingWbs(true)
+    try {
+      const res = await fetch('/api/whiteboards')
+      const data = await res.json()
+      // API returns { ownBoards, sharedBoards } — merge into a flat list
+      const own    = (data.ownBoards    ?? []) as Whiteboard[]
+      const shared = (data.sharedBoards ?? []).map((s: { whiteboards: Whiteboard }) => s.whiteboards).filter(Boolean) as Whiteboard[]
+      const all = [...own, ...shared]
+      // Deduplicate by id
+      const seen = new Set<string>()
+      setWhiteboards(all.filter(wb => { if (seen.has(wb.id)) return false; seen.add(wb.id); return true }))
+    } catch {
+      setWhiteboards([])
+    } finally {
+      setLoadingWbs(false)
+    }
+  }
+
+  const addToWhiteboard = async (boardId: string, boardName: string) => {
+    const selectedGroups = filtered.filter(g => selected.has(g.meta.question_id))
+    if (selectedGroups.length === 0) return
+
+    setAddingToWb(true)
+    try {
+      // Fetch current whiteboard canvas
+      const res = await fetch(`/api/whiteboards/${boardId}`)
+      const data = await res.json()
+      let elements: unknown[] = []
+      try {
+        const parsed = JSON.parse(data.canvas_json || '{}')
+        elements = parsed.elements ?? []
+      } catch { /* empty board */ }
+
+      // Add question images side by side in a row
+      const IMG_W = 600
+      const IMG_H = 400
+      const GAP   = 40
+      const PER_ROW = 2
+
+      // Find the bottom of existing content to place new images below
+      let startY = 100
+      for (const el of elements) {
+        const e = el as { type: string; y?: number; h?: number; pts?: number[][] }
+        if (e.type === 'image' && e.y !== undefined && e.h !== undefined) {
+          startY = Math.max(startY, e.y + e.h + GAP)
+        }
+        if (e.type === 'stroke' && e.pts) {
+          const maxY = Math.max(...e.pts.map((p: number[]) => p[1]))
+          startY = Math.max(startY, maxY + GAP)
+        }
+      }
+
+      const newEls = selectedGroups.map((g, i) => {
+        const col = i % PER_ROW
+        const row = Math.floor(i / PER_ROW)
+        return {
+          id: Math.random().toString(36).slice(2),
+          type: 'image',
+          url: g.meta.question_image_url,
+          x: col * (IMG_W + GAP) + 60,
+          y: startY + row * (IMG_H + GAP),
+          w: IMG_W,
+          h: IMG_H,
+        }
+      }).filter(el => !!el.url)
+
+      const newCanvas = JSON.stringify({ version: 1, elements: [...elements, ...newEls] })
+      await fetch(`/api/whiteboards/${boardId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ canvas_json: newCanvas }),
+      })
+
+      setWbSuccess(boardName)
+      setShowWbPicker(false)
+      setSelected(new Set())
+      setTimeout(() => setWbSuccess(null), 3000)
+    } catch (err) {
+      console.error('Add to whiteboard error:', err)
+    } finally {
+      setAddingToWb(false)
+    }
+  }
+
+  const hasFilters = correctness !== 'all' || diffFilter || domainFilter || skillFilter
 
   return (
     <div
@@ -577,19 +712,28 @@ function AnalyzeDrawer({
         style={{ background: 'var(--background)', maxHeight: '90vh' }}>
 
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b"
-          style={{ borderColor: 'var(--border)' }}>
-          <div>
-            <h2 className="text-lg font-bold" style={{ color: 'var(--foreground)' }}>
-              Analyze Problems
-            </h2>
-            <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-              {grouped.length} unique question{grouped.length !== 1 ? 's' : ''} ·{' '}
-              {answers.length} total attempt{answers.length !== 1 ? 's' : ''}
-            </p>
+        <div className="px-5 py-4 border-b" style={{ borderColor: 'var(--border)' }}>
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div>
+              <h2 className="text-lg font-bold" style={{ color: 'var(--foreground)' }}>
+                Analyze Problems
+              </h2>
+              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                {grouped.length} unique question{grouped.length !== 1 ? 's' : ''} ·{' '}
+                {answers.length} total attempt{answers.length !== 1 ? 's' : ''}
+              </p>
+            </div>
+            <button
+              onClick={onClose}
+              className="w-8 h-8 rounded-full flex items-center justify-center text-lg transition-colors flex-shrink-0"
+              style={{ color: 'var(--text-muted)', background: 'var(--border)' }}>
+              ×
+            </button>
           </div>
-          <div className="flex items-center gap-3">
-            {/* Correctness filter */}
+
+          {/* Filter row */}
+          <div className="flex flex-wrap gap-2 items-center">
+            {/* Correctness */}
             <div className="flex gap-1">
               {(['all', 'correct', 'wrong'] as const).map(c => (
                 <button
@@ -602,17 +746,113 @@ function AnalyzeDrawer({
                     color:       correctness === c ? 'var(--accent)' : 'var(--text-muted)',
                     fontWeight:  correctness === c ? 600 : 400,
                   }}>
-                  {c === 'all' ? 'All' : c === 'correct' ? '✓' : '✗'}
+                  {c === 'all' ? 'All' : c === 'correct' ? '✓ Correct' : '✗ Wrong'}
                 </button>
               ))}
             </div>
-            <button
-              onClick={onClose}
-              className="w-8 h-8 rounded-full flex items-center justify-center text-lg transition-colors"
-              style={{ color: 'var(--text-muted)', background: 'var(--border)' }}>
-              ×
-            </button>
+
+            {/* Difficulty filter */}
+            {availableDiffs.length > 0 && (
+              <div className="flex gap-1">
+                {availableDiffs.map(d => {
+                  const color = d === 'Easy' ? '#16a34a' : d === 'Medium' ? '#d97706' : '#dc2626'
+                  return (
+                    <button
+                      key={d}
+                      onClick={() => setDiffFilter(diffFilter === d ? null : d)}
+                      className="text-xs px-2.5 py-1.5 rounded-lg border transition-colors"
+                      style={{
+                        borderColor: diffFilter === d ? color : 'var(--border)',
+                        background:  diffFilter === d ? color + '20' : 'transparent',
+                        color:       diffFilter === d ? color : 'var(--text-muted)',
+                        fontWeight:  diffFilter === d ? 600 : 400,
+                      }}>
+                      {d}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+
+            {/* Domain filter */}
+            {availableDomains.length > 1 && (
+              <select
+                value={domainFilter ?? ''}
+                onChange={e => { setDomainFilter(e.target.value || null); setSkillFilter(null) }}
+                className="text-xs px-2.5 py-1.5 rounded-lg border outline-none"
+                style={{ borderColor: domainFilter ? 'var(--accent)' : 'var(--border)', background: domainFilter ? 'var(--accent-light)' : 'var(--background)', color: domainFilter ? 'var(--accent)' : 'var(--text-muted)' }}>
+                <option value="">All Topics</option>
+                {availableDomains.map(d => <option key={d} value={d}>{d}</option>)}
+              </select>
+            )}
+
+            {/* Skill filter */}
+            {availableSkills.length > 0 && (
+              <select
+                value={skillFilter ?? ''}
+                onChange={e => setSkillFilter(e.target.value || null)}
+                className="text-xs px-2.5 py-1.5 rounded-lg border outline-none"
+                style={{ borderColor: skillFilter ? 'var(--accent)' : 'var(--border)', background: skillFilter ? 'var(--accent-light)' : 'var(--background)', color: skillFilter ? 'var(--accent)' : 'var(--text-muted)' }}>
+                <option value="">All Skills</option>
+                {availableSkills.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            )}
+
+            {/* Clear filters */}
+            {hasFilters && (
+              <button
+                onClick={() => { setCorrectness('all'); setDiffFilter(null); setDomainFilter(null); setSkillFilter(null) }}
+                className="text-xs px-2 py-1 rounded-lg transition-colors"
+                style={{ color: 'var(--accent)', background: 'var(--accent-light)' }}>
+                Clear
+              </button>
+            )}
           </div>
+
+          {/* Selection bar */}
+          {filtered.length > 0 && (
+            <div className="flex items-center gap-3 mt-3 pt-3 border-t" style={{ borderColor: 'var(--border)' }}>
+              <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: 'var(--text-muted)' }}>
+                <input
+                  type="checkbox"
+                  checked={selected.size > 0 && selected.size === filtered.length}
+                  ref={el => { if (el) el.indeterminate = selected.size > 0 && selected.size < filtered.length }}
+                  onChange={toggleSelectAll}
+                  className="w-3.5 h-3.5 rounded"
+                  style={{ accentColor: 'var(--accent)' }}
+                />
+                {selected.size > 0 ? `${selected.size} selected` : 'Select all'}
+              </label>
+
+              {selected.size > 0 && (
+                <>
+                  <button
+                    onClick={openWbPicker}
+                    className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium text-white"
+                    style={{ background: 'var(--accent)' }}>
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                        d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                    </svg>
+                    Add to Whiteboard
+                  </button>
+                  <button
+                    onClick={() => setSelected(new Set())}
+                    className="text-xs px-2 py-1 rounded-lg"
+                    style={{ color: 'var(--text-muted)' }}>
+                    Clear selection
+                  </button>
+                </>
+              )}
+
+              {wbSuccess && (
+                <span className="text-xs px-2.5 py-1 rounded-lg font-medium"
+                  style={{ background: '#f0fdf4', color: '#16a34a' }}>
+                  ✓ Added to &ldquo;{wbSuccess}&rdquo;
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Question list */}
@@ -622,10 +862,12 @@ function AnalyzeDrawer({
               No questions match.
             </p>
           ) : filtered.map(g => {
-            const isExpanded = expanded === g.meta.question_id
-            const rightCount = g.attempts.filter(a => a.is_correct === true).length
-            const wrongCount = g.attempts.length - rightCount
+            const isExpanded  = expanded === g.meta.question_id
+            const isSelected  = selected.has(g.meta.question_id)
+            const rightCount  = g.attempts.filter(a => a.is_correct === true).length
+            const wrongCount  = g.attempts.length - rightCount
             const lastCorrect = g.attempts[g.attempts.length - 1]?.is_correct === true
+            const diffColor   = g.meta.difficulty === 'Easy' ? '#16a34a' : g.meta.difficulty === 'Medium' ? '#d97706' : g.meta.difficulty === 'Hard' ? '#dc2626' : '#6b7280'
 
             return (
               <div
@@ -633,48 +875,58 @@ function AnalyzeDrawer({
                 className="rounded-2xl border overflow-hidden"
                 style={{
                   background:  'var(--card)',
-                  borderColor: lastCorrect ? '#bbf7d0' : '#fecaca',
+                  borderColor: isSelected ? 'var(--accent)' : lastCorrect ? '#bbf7d0' : '#fecaca',
+                  boxShadow:   isSelected ? '0 0 0 1px var(--accent)' : undefined,
                 }}>
                 {/* Row header */}
-                <button
-                  onClick={() => setExpanded(isExpanded ? null : g.meta.question_id)}
+                <div
                   className="w-full flex items-center gap-3 px-4 py-3 text-left"
-                  style={{
-                    background: lastCorrect ? '#f0fdf420' : '#fef2f220',
-                  }}>
-                  <span
-                    className="w-5 h-5 rounded-full flex items-center justify-center font-bold text-white text-xs flex-shrink-0"
-                    style={{ background: lastCorrect ? '#16a34a' : '#dc2626' }}>
-                    {lastCorrect ? '✓' : '✗'}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium truncate" style={{ color: 'var(--text-muted)' }}>
-                      {g.meta.domain} · {g.meta.skill}
-                    </p>
-                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                      {g.meta.difficulty || 'Unrated'}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2 flex-shrink-0 text-xs">
-                    {g.attempts.length > 1 && (
-                      <span className="px-2 py-0.5 rounded-full font-medium"
-                        style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
-                        {g.attempts.length}× attempted
+                  style={{ background: isSelected ? 'var(--accent-light)' : lastCorrect ? '#f0fdf420' : '#fef2f220' }}>
+                  {/* Checkbox */}
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => toggleSelect(g.meta.question_id)}
+                    onClick={e => e.stopPropagation()}
+                    className="w-4 h-4 rounded flex-shrink-0 cursor-pointer"
+                    style={{ accentColor: 'var(--accent)' }}
+                  />
+
+                  <button
+                    onClick={() => setExpanded(isExpanded ? null : g.meta.question_id)}
+                    className="flex items-center gap-3 flex-1 min-w-0 text-left">
+                    <span
+                      className="w-5 h-5 rounded-full flex items-center justify-center font-bold text-white text-xs flex-shrink-0"
+                      style={{ background: lastCorrect ? '#16a34a' : '#dc2626' }}>
+                      {lastCorrect ? '✓' : '✗'}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium truncate" style={{ color: 'var(--text-muted)' }}>
+                        {g.meta.domain}{g.meta.skill ? ` · ${g.meta.skill}` : ''}
+                      </p>
+                      <span className="text-xs px-1.5 py-0.5 rounded-full inline-block mt-0.5"
+                        style={{ background: diffColor + '20', color: diffColor }}>
+                        {g.meta.difficulty || 'Unrated'}
                       </span>
-                    )}
-                    <span style={{ color: '#16a34a' }}>{rightCount} ✓</span>
-                    <span style={{ color: '#dc2626' }}>{wrongCount} ✗</span>
-                    <svg
-                      className="w-4 h-4 transition-transform"
-                      style={{
-                        color: 'var(--text-muted)',
-                        transform: isExpanded ? 'rotate(180deg)' : 'none',
-                      }}
-                      fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                    </svg>
-                  </div>
-                </button>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0 text-xs">
+                      {g.attempts.length > 1 && (
+                        <span className="px-2 py-0.5 rounded-full font-medium"
+                          style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
+                          {g.attempts.length}× attempted
+                        </span>
+                      )}
+                      <span style={{ color: '#16a34a' }}>{rightCount} ✓</span>
+                      <span style={{ color: '#dc2626' }}>{wrongCount} ✗</span>
+                      <svg
+                        className="w-4 h-4 transition-transform"
+                        style={{ color: 'var(--text-muted)', transform: isExpanded ? 'rotate(180deg)' : 'none' }}
+                        fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </div>
+                  </button>
+                </div>
 
                 {/* Expanded content */}
                 {isExpanded && (
@@ -728,6 +980,67 @@ function AnalyzeDrawer({
           })}
         </div>
       </div>
+
+      {/* Whiteboard picker modal */}
+      {showWbPicker && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+          style={{ background: 'rgba(0,0,0,0.6)' }}
+          onClick={e => { if (e.target === e.currentTarget) setShowWbPicker(false) }}>
+          <div className="rounded-2xl shadow-2xl w-full max-w-sm p-5 flex flex-col gap-4"
+            style={{ background: 'var(--card)' }}>
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-sm" style={{ color: 'var(--foreground)' }}>
+                Add {selected.size} question{selected.size !== 1 ? 's' : ''} to whiteboard
+              </h3>
+              <button onClick={() => setShowWbPicker(false)} style={{ color: 'var(--text-muted)' }}>
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            {loadingWbs ? (
+              <div className="flex items-center justify-center py-6">
+                <div className="w-5 h-5 border-2 rounded-full animate-spin"
+                  style={{ borderColor: 'var(--border)', borderTopColor: 'var(--accent)' }} />
+              </div>
+            ) : whiteboards.length === 0 ? (
+              <div className="text-center py-4">
+                <p className="text-sm mb-3" style={{ color: 'var(--text-muted)' }}>No whiteboards yet.</p>
+                <a href="/whiteboards/new" target="_blank" rel="noreferrer"
+                  className="text-sm px-4 py-2 rounded-xl font-medium text-white"
+                  style={{ background: 'var(--accent)' }}>
+                  Create a whiteboard
+                </a>
+              </div>
+            ) : (
+              <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                {whiteboards.map(wb => (
+                  <button
+                    key={wb.id}
+                    onClick={() => addToWhiteboard(wb.id, wb.name)}
+                    disabled={addingToWb}
+                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left transition-colors disabled:opacity-50 hover:opacity-80"
+                    style={{ background: 'var(--background)', borderColor: 'var(--border)' }}>
+                    <div className="w-7 h-7 rounded-lg flex-shrink-0 flex items-center justify-center"
+                      style={{ background: 'var(--accent-light)' }}>
+                      <svg className="w-3.5 h-3.5" style={{ color: 'var(--accent)' }} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                          d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                      </svg>
+                    </div>
+                    <span className="text-sm font-medium truncate" style={{ color: 'var(--foreground)' }}>
+                      {wb.name}
+                    </span>
+                    {addingToWb && <div className="w-4 h-4 border-2 rounded-full animate-spin ml-auto flex-shrink-0"
+                      style={{ borderColor: 'var(--border)', borderTopColor: 'var(--accent)' }} />}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
