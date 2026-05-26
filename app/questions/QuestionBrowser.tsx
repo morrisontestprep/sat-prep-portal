@@ -14,8 +14,12 @@ type Question = {
   skill: string
   difficulty: string
   correct_answer: string
-  question_image_url: string
-  answer_image_url: string
+  question_image_url: string | null
+  answer_image_url: string | null
+  is_ai_generated?: boolean
+  stem?: string | null
+  choices?: Record<string, string> | null
+  distractor_notes?: Record<string, string> | null
 }
 
 type Student = { id: string; full_name: string | null; email: string | null }
@@ -26,6 +30,7 @@ type Filters = {
   skill: string
   difficulty: string
   tags: number[]   // tag IDs — AND logic
+  aiFilter: 'all' | 'ai' | 'human'
 }
 
 const DIFFICULTIES = ['Easy', 'Medium', 'Hard', 'Unrated']
@@ -118,7 +123,7 @@ export default function QuestionBrowser({
   const [frMode, setFrMode] = useState<'replace' | 'delete'>('replace')
 
   const [filters, setFilters] = useState<Filters>({
-    subject: '', domain: '', skill: '', difficulty: '', tags: [],
+    subject: '', domain: '', skill: '', difficulty: '', tags: [], aiFilter: 'all',
   })
 
   // All skills available for the current subject + domain selection
@@ -221,6 +226,8 @@ export default function QuestionBrowser({
     if (f.subject)    query = query.eq('subject', f.subject)
     if (f.domain)     query = query.eq('domain', f.domain)
     if (f.skill)      query = query.eq('skill', f.skill)
+    if (f.aiFilter === 'ai')    query = query.eq('is_ai_generated', true)
+    if (f.aiFilter === 'human') query = query.or('is_ai_generated.is.null,is_ai_generated.eq.false')
     if (f.difficulty) {
       if (f.difficulty === 'Unrated') {
         query = query.or('difficulty.is.null,difficulty.eq.')
@@ -733,6 +740,29 @@ export default function QuestionBrowser({
           </div>
         </div>
 
+        {/* Source */}
+        <div className="mb-5">
+          <p className="text-xs font-medium mb-2" style={{ color: 'var(--foreground)' }}>Source</p>
+          <div className="flex flex-col gap-1">
+            {([
+              { v: 'all',   l: 'All questions' },
+              { v: 'human', l: 'Official SAT' },
+              { v: 'ai',    l: '✦ AI Generated' },
+            ] as const).map(opt => (
+              <button key={opt.v}
+                onClick={() => setFilters(f => ({ ...f, aiFilter: opt.v }))}
+                className="text-left px-3 py-1.5 rounded-lg text-sm transition-colors"
+                style={{
+                  background: filters.aiFilter === opt.v ? 'var(--accent-light)' : 'transparent',
+                  color: filters.aiFilter === opt.v ? 'var(--accent)' : 'var(--text-muted)',
+                  fontWeight: filters.aiFilter === opt.v ? '500' : '400',
+                }}>
+                {opt.l}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* Not Assigned To filter */}
         {allStudents.length > 0 && (
           <div className="mb-5">
@@ -1085,6 +1115,12 @@ export default function QuestionBrowser({
                     <span className="text-xs flex-shrink-0" style={{ color: 'var(--text-muted)' }}>{q.domain}</span>
                     <span className="text-xs flex-shrink-0" style={{ color: 'var(--text-muted)' }}>·</span>
                     <span className="text-xs flex-shrink-0 truncate max-w-40" style={{ color: 'var(--text-muted)' }}>{q.skill}</span>
+                    {q.is_ai_generated && (
+                      <span className="text-xs px-1.5 py-0.5 rounded-full font-semibold flex-shrink-0"
+                        style={{ background: '#f3e8ff', color: '#7e22ce', border: '1px solid #e9d5ff' }}>
+                        ✦ AI
+                      </span>
+                    )}
                     {/* Clickable difficulty badge with inline picker */}
                     <div className="relative flex-shrink-0">
                       <button
@@ -1271,32 +1307,86 @@ export default function QuestionBrowser({
                 {/* Expanded view */}
                 {isExpanded && (
                   <div className="border-t px-4 py-4" style={{ borderColor: 'var(--border)' }}>
-                    <div className="flex gap-4">
-                      <div className="flex-1">
-                        <p className="text-xs font-medium mb-2" style={{ color: 'var(--text-muted)' }}>Question</p>
-                        <Image
-                          src={q.question_image_url}
-                          alt="Question"
-                          width={600} height={300}
-                          className="rounded-lg w-full object-contain"
-                          style={{ maxHeight: 400 }}
-                          unoptimized
-                        />
+                    {q.stem ? (
+                      /* ── Text-based AI question ── */
+                      <div>
+                        <p className="text-sm leading-relaxed mb-4" style={{ color: 'var(--foreground)' }}>
+                          {q.stem.split('\n\n').map((part, i) => (
+                            <span key={i}>{i > 0 && <><br /><br /></>}{part}</span>
+                          ))}
+                        </p>
+                        {q.choices && (
+                          <div className="space-y-2 mb-4">
+                            {(['A', 'B', 'C', 'D'] as const).map(letter => {
+                              const isCorrect = letter === q.correct_answer
+                              return (
+                                <div key={letter}
+                                  className="flex items-start gap-3 px-3 py-2 rounded-xl text-sm"
+                                  style={{
+                                    background: isCorrect && isShowingAnswer ? '#dcfce7' : 'var(--background)',
+                                    border: isCorrect && isShowingAnswer ? '1.5px solid #16a34a' : '1px solid var(--border)',
+                                    color: isCorrect && isShowingAnswer ? '#166534' : 'var(--foreground)',
+                                  }}>
+                                  <span className="font-bold w-4 flex-shrink-0">{letter}.</span>
+                                  <span>{q.choices![letter]}</span>
+                                  {isCorrect && isShowingAnswer && (
+                                    <span className="text-xs ml-auto font-semibold" style={{ color: '#166534' }}>✓</span>
+                                  )}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+                        {isShowingAnswer && q.distractor_notes && (
+                          <div className="p-3 rounded-xl text-xs space-y-1.5 mb-3"
+                            style={{ background: 'var(--background)', border: '1px solid var(--border)' }}>
+                            <p className="font-semibold uppercase tracking-wide mb-1.5" style={{ color: 'var(--text-muted)' }}>
+                              Distractor reasoning
+                            </p>
+                            {(['A', 'B', 'C', 'D'] as const).map(letter => {
+                              const note = q.distractor_notes![letter]
+                              if (!note) return null
+                              return (
+                                <div key={letter} className="flex gap-2">
+                                  <span className="font-bold flex-shrink-0" style={{ color: 'var(--text-muted)' }}>{letter}.</span>
+                                  <span style={{ color: 'var(--text-muted)' }}>{note}</span>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
                       </div>
-                      {isShowingAnswer && (
+                    ) : (
+                      /* ── Image-based question ── */
+                      <div className="flex gap-4">
                         <div className="flex-1">
-                          <p className="text-xs font-medium mb-2" style={{ color: 'var(--text-muted)' }}>Answer</p>
-                          <Image
-                            src={q.answer_image_url}
-                            alt="Answer"
-                            width={600} height={300}
-                            className="rounded-lg w-full object-contain"
-                            style={{ maxHeight: 400 }}
-                            unoptimized
-                          />
+                          <p className="text-xs font-medium mb-2" style={{ color: 'var(--text-muted)' }}>Question</p>
+                          {q.question_image_url && (
+                            <Image
+                              src={q.question_image_url}
+                              alt="Question"
+                              width={600} height={300}
+                              className="rounded-lg w-full object-contain"
+                              style={{ maxHeight: 400 }}
+                              unoptimized
+                            />
+                          )}
                         </div>
-                      )}
-                    </div>
+                        {isShowingAnswer && q.answer_image_url && (
+                          <div className="flex-1">
+                            <p className="text-xs font-medium mb-2" style={{ color: 'var(--text-muted)' }}>Answer</p>
+                            <Image
+                              src={q.answer_image_url}
+                              alt="Answer"
+                              width={600} height={300}
+                              className="rounded-lg w-full object-contain"
+                              style={{ maxHeight: 400 }}
+                              unoptimized
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     <div className="mt-3 flex items-center gap-3">
                       <button

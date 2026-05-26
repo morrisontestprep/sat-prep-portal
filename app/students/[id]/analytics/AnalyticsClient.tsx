@@ -931,12 +931,25 @@ function AnalyzeDrawer({
                 {/* Expanded content */}
                 {isExpanded && (
                   <div className="border-t" style={{ borderColor: 'var(--border)' }}>
-                    {/* Question image */}
-                    {g.meta.question_image_url && (
+                    {/* Question image / text */}
+                    {g.meta.stem ? (
+                      <div className="px-4 pt-4">
+                        <div className="rounded-xl p-3" style={{ background: 'var(--background)', border: '1px solid var(--border)' }}>
+                          {g.meta.passage && <p className="text-xs italic mb-2" style={{ color: 'var(--text-muted)' }}>{g.meta.passage}</p>}
+                          <p className="text-sm leading-relaxed" style={{ color: 'var(--foreground)' }}>{g.meta.stem}</p>
+                          {g.meta.choices && ['A','B','C','D'].map(letter => (
+                            <div key={letter} className="flex gap-2 mt-1.5 text-sm" style={{ color: 'var(--foreground)' }}>
+                              <span className="font-bold w-4 flex-shrink-0">{letter}.</span>
+                              <span>{g.meta.choices![letter]}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : g.meta.question_image_url ? (
                       <div className="px-4 pt-4">
                         <img src={g.meta.question_image_url} alt="Question" className="w-full rounded-lg" />
                       </div>
-                    )}
+                    ) : null}
                     {/* Attempts list */}
                     <div className="px-4 py-3 space-y-2">
                       {g.attempts.map((attempt, i) => (
@@ -965,14 +978,14 @@ function AnalyzeDrawer({
                       ))}
                     </div>
                     {/* Answer explanation */}
-                    {g.meta.answer_image_url && (
+                    {g.meta.stem ? null : g.meta.answer_image_url ? (
                       <div className="px-4 pb-4 border-t pt-3" style={{ borderColor: 'var(--border)' }}>
                         <p className="text-xs font-semibold mb-2" style={{ color: 'var(--text-muted)' }}>
                           Explanation
                         </p>
                         <img src={g.meta.answer_image_url} alt="Explanation" className="w-full rounded-lg" />
                       </div>
-                    )}
+                    ) : null}
                   </div>
                 )}
               </div>
@@ -1288,6 +1301,14 @@ export default function AnalyticsClient({ student, allStudents, answers, isTeach
           </h1>
           {isTeacher && student.email && (
             <p className="text-sm" style={{ color: 'var(--text-muted)' }}>{student.email}</p>
+          )}
+          {isTeacher && (
+            <a
+              href={`/students/${student.id}/practice-tests`}
+              className="inline-block mt-1 text-xs px-3 py-1 rounded-lg font-medium"
+              style={{ background: 'var(--accent-light)', color: 'var(--accent)' }}>
+              📋 View Practice Tests
+            </a>
           )}
         </div>
 

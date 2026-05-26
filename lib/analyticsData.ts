@@ -16,6 +16,9 @@ export type UnifiedAnswer = {
   correct_answer: string
   question_image_url: string | null
   answer_image_url: string | null
+  stem?: string | null
+  passage?: string | null
+  choices?: Record<string, string> | null
 
   // Answer data
   selected_answer: string | null

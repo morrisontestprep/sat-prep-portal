@@ -504,12 +504,25 @@ export default function TakeWorksheet({
                 </span>
               </div>
 
-              {/* Question image */}
-              <div className="rounded-2xl border overflow-hidden mb-4"
-                style={{ borderColor: 'var(--border)', background: 'white' }}>
-                <img src={reviewQ.question_image_url} alt={`Question ${currentIndex + 1}`}
-                  className="w-full object-contain" style={{ maxHeight: 420 }} />
-              </div>
+              {/* Question image / text */}
+              {reviewQ.stem ? (
+                <div className="rounded-xl p-3 mb-4" style={{ background: 'var(--background)', border: '1px solid var(--border)' }}>
+                  {reviewQ.passage && <p className="text-xs italic mb-2" style={{ color: 'var(--text-muted)' }}>{reviewQ.passage}</p>}
+                  <p className="text-sm leading-relaxed" style={{ color: 'var(--foreground)' }}>{reviewQ.stem}</p>
+                  {reviewQ.choices && ['A','B','C','D'].map(letter => (
+                    <div key={letter} className="flex gap-2 mt-1.5 text-sm" style={{ color: 'var(--foreground)' }}>
+                      <span className="font-bold w-4 flex-shrink-0">{letter}.</span>
+                      <span>{reviewQ.choices![letter]}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : reviewQ.question_image_url ? (
+                <div className="rounded-2xl border overflow-hidden mb-4"
+                  style={{ borderColor: 'var(--border)', background: 'white' }}>
+                  <img src={reviewQ.question_image_url} alt={`Question ${currentIndex + 1}`}
+                    className="w-full object-contain" style={{ maxHeight: 420 }} />
+                </div>
+              ) : null}
 
               {/* Answer result */}
               {isFreeResponse(reviewQ.correct_answer) ? (
@@ -554,8 +567,13 @@ export default function TakeWorksheet({
                 </div>
               )}
 
-              {/* Official answer explanation image */}
-              {reviewQ.answer_image_url && (
+              {/* Official answer explanation image / text */}
+              {reviewQ.stem ? (
+                <div className="rounded-xl p-3" style={{ background: 'var(--background)', border: '1px solid var(--border)' }}>
+                  <p className="text-xs font-medium mb-1" style={{ color: 'var(--text-muted)' }}>Correct answer</p>
+                  <p className="text-sm font-semibold" style={{ color: '#16a34a' }}>{reviewQ.correct_answer}</p>
+                </div>
+              ) : reviewQ.answer_image_url ? (
                 <div className="rounded-2xl border overflow-hidden"
                   style={{ borderColor: 'var(--border)', background: 'white' }}>
                   <div className="px-4 pt-3 pb-1 border-b" style={{ borderColor: 'var(--border)' }}>
@@ -564,7 +582,7 @@ export default function TakeWorksheet({
                   <img src={reviewQ.answer_image_url} alt="Answer explanation"
                     className="w-full object-contain" style={{ maxHeight: 400, background: 'white' }} />
                 </div>
-              )}
+              ) : null}
             </div>
 
             {/* Drag handle — desktop only */}
@@ -720,13 +738,24 @@ export default function TakeWorksheet({
               {saving && <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Saving...</span>}
             </div>
 
-            {currentQ.question_image_url && (
+            {currentQ.stem ? (
+              <div className="rounded-xl p-3 mb-3" style={{ background: 'var(--background)', border: '1px solid var(--border)' }}>
+                {currentQ.passage && <p className="text-xs italic mb-2" style={{ color: 'var(--text-muted)' }}>{currentQ.passage}</p>}
+                <p className="text-sm leading-relaxed" style={{ color: 'var(--foreground)' }}>{currentQ.stem}</p>
+                {currentQ.choices && ['A','B','C','D'].map(letter => (
+                  <div key={letter} className="flex gap-2 mt-1.5 text-sm" style={{ color: 'var(--foreground)' }}>
+                    <span className="font-bold w-4 flex-shrink-0">{letter}.</span>
+                    <span>{currentQ.choices![letter]}</span>
+                  </div>
+                ))}
+              </div>
+            ) : currentQ.question_image_url ? (
               <div className="rounded-2xl overflow-hidden border mb-6"
                 style={{ borderColor: 'var(--border)', background: 'white' }}>
                 <img src={currentQ.question_image_url} alt={`Question ${currentIndex + 1}`}
                   className="w-full" style={{ maxHeight: '400px', objectFit: 'contain' }} />
               </div>
-            )}
+            ) : null}
 
             {/* Answer input: multiple choice or free response */}
             {isFreeResponse(currentQ.correct_answer) ? (
@@ -788,7 +817,7 @@ export default function TakeWorksheet({
                         }}>
                         {choice}
                       </span>
-                      Choice {choice}
+                      {currentQ.choices ? currentQ.choices[choice] : `Choice ${choice}`}
                     </button>
                   )
                 })}

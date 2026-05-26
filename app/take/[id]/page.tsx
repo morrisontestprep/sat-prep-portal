@@ -94,9 +94,12 @@ export type WorksheetItem = {
     domain: string
     skill: string
     difficulty: string
-    question_image_url: string
-    answer_image_url: string
+    question_image_url: string | null
+    answer_image_url: string | null
     correct_answer: string
+    stem?: string | null
+    passage?: string | null
+    choices?: Record<string, string> | null
   } | null
 }
 

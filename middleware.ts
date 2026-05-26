@@ -78,7 +78,7 @@ export async function middleware(request: NextRequest) {
 
     // Block students from teacher-only pages
     if (!isTeacher) {
-      const teacherOnlyPaths = ['/dashboard', '/questions', '/worksheets', '/students']
+      const teacherOnlyPaths = ['/dashboard', '/questions', '/worksheets', '/students', '/ai-question-bank']
       if (teacherOnlyPaths.some(p => pathname.startsWith(p))) {
         return NextResponse.redirect(new URL('/my-assignments', request.url))
       }

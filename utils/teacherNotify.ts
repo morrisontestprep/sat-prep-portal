@@ -9,6 +9,7 @@ export type TeacherNotifType =
   | 'sat_rush_started'
   | 'sat_rush_completed'
   | 'practice_completed'
+  | 'practice_test_completed'
   | 'student_signup_pending'   // new student waiting for approval
 
 export interface TeacherNotifData {
@@ -27,6 +28,11 @@ export interface TeacherNotifData {
   // Practice sessions
   sessionId?: string
   questionCount?: number
+  // Practice tests
+  testId?: string
+  rwScore?: number
+  mathScore?: number
+  satTotalScore?: number
 }
 
 export async function notifyTeacher(

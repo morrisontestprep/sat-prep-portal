@@ -14,7 +14,8 @@ import type { SelectedQuestion } from '@/components/AddToWhiteboardModal'
 // -- Types --------------------------------------------------------------------
 type Question = {
   id: string; subject: string; domain: string; skill: string; difficulty: string
-  question_image_url: string; answer_image_url: string; correct_answer: string
+  question_image_url: string | null; answer_image_url: string | null; correct_answer: string
+  stem?: string | null; passage?: string | null; choices?: Record<string, string> | null
 }
 type Student = { id: string; full_name: string | null; email: string | null }
 
@@ -888,13 +889,26 @@ export default function WorksheetView({
                         <BlockActions localId={block.localId} isFirst={isFirst} isLast={isLast} onMove={moveBlock} onRemove={removeBlock} />
                       </div>
                       <div className="px-4 pt-4 pb-2">
-                        <Image
-                          src={block.question.question_image_url}
-                          alt={`Question ${qNum}`}
-                          width={700} height={700}
-                          className="w-full rounded-lg object-contain"
-                          unoptimized
-                        />
+                        {block.question.stem ? (
+                          <div className="rounded-xl p-3" style={{ background: 'var(--background)', border: '1px solid var(--border)' }}>
+                            {block.question.passage && <p className="text-xs italic mb-2" style={{ color: 'var(--text-muted)' }}>{block.question.passage}</p>}
+                            <p className="text-sm leading-relaxed" style={{ color: 'var(--foreground)' }}>{block.question.stem}</p>
+                            {block.question.choices && ['A','B','C','D'].map(letter => (
+                              <div key={letter} className="flex gap-2 mt-1.5 text-sm" style={{ color: 'var(--foreground)' }}>
+                                <span className="font-bold w-4 flex-shrink-0">{letter}.</span>
+                                <span>{block.question.choices![letter]}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : block.question.question_image_url ? (
+                          <Image
+                            src={block.question.question_image_url}
+                            alt={`Question ${qNum}`}
+                            width={700} height={700}
+                            className="w-full rounded-lg object-contain"
+                            unoptimized
+                          />
+                        ) : null}
                       </div>
                       {selectedAssignmentId && block.type === 'question' && (() => {
                         const sa = selectedAnswersMap[block.question.id]
@@ -946,18 +960,20 @@ export default function WorksheetView({
                           </span>
                         )}
                       </div>
-                      {showAnswers.has(block.localId) && block.question.answer_image_url && (
-                        <div className="px-4 pb-4 border-t pt-3" style={{ borderColor: 'var(--border)' }}>
-                          <p className="text-xs font-medium mb-2" style={{ color: 'var(--text-muted)' }}>Answer</p>
-                          <Image
-                            src={block.question.answer_image_url}
-                            alt={`Answer ${qNum}`}
-                            width={700} height={350}
-                            className="w-full rounded-lg object-contain"
-                            style={{ maxHeight: 400 }}
-                            unoptimized
-                          />
-                        </div>
+                      {showAnswers.has(block.localId) && (
+                        block.question.stem ? null : block.question.answer_image_url ? (
+                          <div className="px-4 pb-4 border-t pt-3" style={{ borderColor: 'var(--border)' }}>
+                            <p className="text-xs font-medium mb-2" style={{ color: 'var(--text-muted)' }}>Answer</p>
+                            <Image
+                              src={block.question.answer_image_url}
+                              alt={`Answer ${qNum}`}
+                              width={700} height={350}
+                              className="w-full rounded-lg object-contain"
+                              style={{ maxHeight: 400 }}
+                              unoptimized
+                            />
+                          </div>
+                        ) : null
                       )}
                       {selectedAssignmentId && (() => {
                         const isActive = explanationOpenFor === block.question.id
