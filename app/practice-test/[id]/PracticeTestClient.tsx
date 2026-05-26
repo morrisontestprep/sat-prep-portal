@@ -215,54 +215,6 @@ export default function PracticeTestClient({
     return () => document.removeEventListener('visibilitychange', handleVisibility)
   }, [testId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Save progress helper ───────────────────────────────────────────────────
-  function buildProgressPayload(
-    qs: TestQuestion[],
-    ans: Record<string, LocalAnswer>,
-    mod: Phase,
-    secs: number,
-  ) {
-    return {
-      module: mod,
-      secondsRemaining: secs,
-      answers: qs.map((q, i) => ({
-        questionId:       q.id,
-        correctAnswer:    q.correct_answer,
-        selectedAnswer:   ans[q.id]?.selected ?? null,
-        flagged:          ans[q.id]?.flagged ?? false,
-        timeSpentSeconds: ans[q.id]?.timeTaken ?? 0,
-        position:         i,
-      })),
-    }
-  }
-
-  async function saveProgress() {
-    const { questions: qs, answers: ans, phase: mod, timeLeft: secs } = stateRef.current
-    if (mod === 'break' || mod === 'done') return
-    try {
-      await fetch(`/api/practice-test/${testId}/save-progress`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildProgressPayload(qs, ans, mod, secs)),
-      })
-    } catch { /* silent */ }
-  }
-
-  // ── Save on tab close / navigate away ─────────────────────────────────────
-  useEffect(() => {
-    const handleUnload = () => {
-      const { questions: qs, answers: ans, phase: mod, timeLeft: secs } = stateRef.current
-      if (mod === 'break' || mod === 'done') return
-      const payload = JSON.stringify(buildProgressPayload(qs, ans, mod, secs))
-      navigator.sendBeacon(
-        `/api/practice-test/${testId}/save-progress`,
-        new Blob([payload], { type: 'application/json' }),
-      )
-    }
-    window.addEventListener('beforeunload', handleUnload)
-    return () => window.removeEventListener('beforeunload', handleUnload)
-  }, [testId]) // eslint-disable-line react-hooks/exhaustive-deps
-
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   const currentQ   = questions[currentIndex]
