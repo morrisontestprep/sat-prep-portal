@@ -494,16 +494,14 @@ export default function PracticeTestClient({
             </button>
           </div>
 
-          {/* Question image — metadata header cropped off */}
+          {/* Question image */}
           {currentQ.question_image_url ? (
-            <div className="rounded-2xl border"
-              style={{ borderColor: 'var(--border)', background: 'white', overflow: 'hidden' }}>
-              {/* Negative margin-top hides the Khan Academy metadata table at the top of each image.
-                  The container clips it; overall height shrinks by the same amount. */}
+            <div className="rounded-2xl border overflow-hidden"
+              style={{ borderColor: 'var(--border)', background: 'white' }}>
               <img
                 src={currentQ.question_image_url}
                 alt={`Question ${currentIndex + 1}`}
-                style={{ display: 'block', width: '100%', marginTop: '-215px' }}
+                style={{ display: 'block', width: '100%' }}
               />
             </div>
           ) : (
