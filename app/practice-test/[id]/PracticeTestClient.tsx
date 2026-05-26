@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { isFreeResponse } from '@/utils/grading'
 import DesmosCalculator from '@/components/DesmosCalculator'
 import FormulasButton from '@/components/FormulasButton'
+import { createClient } from '@/utils/supabase/client'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -37,6 +38,7 @@ type SavedAnswer = {
 
 type Props = {
   testId: string
+  studentId: string
   initialModule: Phase
   initialQuestions: TestQuestion[]
   initialTimeSeconds: number
@@ -63,11 +65,13 @@ function fmtTime(s: number): string {
 
 export default function PracticeTestClient({
   testId,
+  studentId,
   initialModule,
   initialQuestions,
   initialTimeSeconds,
   initialSavedAnswers = [],
 }: Props) {
+  const supabase = createClient()
   const router = useRouter()
 
   const [phase, setPhase]           = useState<Phase>(initialModule)
@@ -176,34 +180,66 @@ export default function PracticeTestClient({
     return snapshot
   }
 
-  function buildBeaconPayload() {
-    const mod = phaseRef.current
-    const ans = buildSnapshot()
-    const qs  = questionsRef.current
-    return {
-      module:           mod,
-      secondsRemaining: timeLeftRef.current,
-      answers: qs.map((q, i) => ({
-        questionId:       q.id,
-        correctAnswer:    q.correct_answer,
-        selectedAnswer:   ans[q.id]?.selected ?? null,
-        flagged:          ans[q.id]?.flagged  ?? false,
-        timeSpentSeconds: ans[q.id]?.timeTaken ?? 0,
-        position:         i,
-      })),
-    }
-  }
-
+  // ── Save progress: writes directly to Supabase via browser client ─────────
+  // Uses the browser client (session managed in-browser) instead of the API
+  // route to avoid any server-side cookie auth issues.
   async function saveProgress() {
     const mod = phaseRef.current
     if (mod === 'break' || mod === 'done') return
-    try {
-      await fetch(`/api/practice-test/${testId}/save-progress`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(buildBeaconPayload()),
+
+    const snapshot         = buildSnapshot()
+    const qs               = questionsRef.current
+    const secondsRemaining = timeLeftRef.current
+
+    // Build answer rows — only include answered or flagged questions
+    const answerRows = qs
+      .map((q, i) => {
+        const a = snapshot[q.id]
+        if (!a?.selected && !a?.flagged) return null
+        return {
+          test_id:            testId,
+          student_id:         studentId,
+          module:             mod,
+          position:           i,
+          question_id:        q.id,
+          selected_answer:    a?.selected   ?? null,
+          correct_answer:     q.correct_answer,
+          is_correct:         null, // not graded until submit
+          flagged:            a?.flagged    ?? false,
+          time_spent_seconds: a?.timeTaken  ?? 0,
+        }
       })
-    } catch { /* best-effort */ }
+      .filter((r): r is NonNullable<typeof r> => r !== null)
+
+    // Timer field for this module
+    const timerField: Record<string, number> = {
+      rw_m1:   () => ({ rw_m1_seconds_remaining:   secondsRemaining }),
+      rw_m2:   () => ({ rw_m2_seconds_remaining:   secondsRemaining }),
+      math_m1: () => ({ math_m1_seconds_remaining: secondsRemaining }),
+      math_m2: () => ({ math_m2_seconds_remaining: secondsRemaining }),
+    }[mod]?.() ?? {}
+
+    try {
+      // Clear existing partial answers for this module, then insert fresh
+      await supabase
+        .from('practice_test_answers')
+        .delete()
+        .eq('test_id', testId)
+        .eq('module', mod)
+
+      if (answerRows.length > 0) {
+        await supabase.from('practice_test_answers').insert(answerRows)
+      }
+
+      if (Object.keys(timerField).length > 0) {
+        await supabase
+          .from('practice_tests')
+          .update(timerField)
+          .eq('id', testId)
+      }
+    } catch (e) {
+      console.error('[saveProgress] error:', e)
+    }
   }
 
   // ── Auto-save every 30 s ───────────────────────────────────────────────────
@@ -214,16 +250,33 @@ export default function PracticeTestClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, paused])
 
-  // ── Save on tab hide / close via sendBeacon ────────────────────────────────
+  // ── Save on tab hide / close (keepalive fetch — more reliable than beacon) ─
   useEffect(() => {
     const handleVisibility = () => {
       if (document.visibilityState !== 'hidden') return
       const mod = phaseRef.current
       if (mod === 'break' || mod === 'done') return
-      navigator.sendBeacon(
-        `/api/practice-test/${testId}/save-progress`,
-        new Blob([JSON.stringify(buildBeaconPayload())], { type: 'application/json' }),
-      )
+      const snapshot = buildSnapshot()
+      const qs = questionsRef.current
+      const payload = {
+        module:           mod,
+        secondsRemaining: timeLeftRef.current,
+        answers: qs.map((q, i) => ({
+          questionId:       q.id,
+          correctAnswer:    q.correct_answer,
+          selectedAnswer:   snapshot[q.id]?.selected ?? null,
+          flagged:          snapshot[q.id]?.flagged  ?? false,
+          timeSpentSeconds: snapshot[q.id]?.timeTaken ?? 0,
+          position:         i,
+        })),
+      }
+      // keepalive: true ensures the request completes even if the tab closes
+      fetch(`/api/practice-test/${testId}/save-progress`, {
+        method:    'POST',
+        headers:   { 'Content-Type': 'application/json' },
+        body:      JSON.stringify(payload),
+        keepalive: true,
+      }).catch(() => {})
     }
     document.addEventListener('visibilitychange', handleVisibility)
     return () => document.removeEventListener('visibilitychange', handleVisibility)

@@ -63,6 +63,7 @@ export default async function PracticeTestPage({
   return (
     <PracticeTestClient
       testId={testId}
+      studentId={user.id}
       initialModule={currentModule as 'rw_m1' | 'rw_m2' | 'math_m1' | 'math_m2'}
       initialQuestions={orderedQuestions as Parameters<typeof PracticeTestClient>[0]['initialQuestions']}
       initialTimeSeconds={timeSeconds}
