@@ -86,7 +86,7 @@ export async function getSeenQuestionIds(
       : Promise.resolve({ data: [] }),
     supabase.from('sat_rush_answers').select('question_id').eq('student_id', studentId),
     supabase.from('practice_answers').select('question_id').eq('student_id', studentId),
-    supabase.from('practice_test_answers').select('question_id').eq('student_id', studentId),
+    supabase.from('practice_test_answers').select('question_id').eq('student_id', studentId).not('selected_answer', 'is', null),
   ])
 
   return new Set<string>([
