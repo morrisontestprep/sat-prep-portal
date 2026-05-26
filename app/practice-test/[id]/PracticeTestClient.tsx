@@ -104,6 +104,20 @@ export default function PracticeTestClient({
   const breakInterval    = useRef<ReturnType<typeof setInterval> | null>(null)
   const questionStartRef = useRef<number>(Date.now())
 
+  // Keep refs in sync so beforeunload/visibilitychange always see current state
+  const answersRef   = useRef(answers)
+  const timeLeftRef  = useRef(timeLeft)
+  const phaseRef     = useRef(phase)
+  const questionsRef = useRef(questions)
+  useEffect(() => { answersRef.current   = answers   }, [answers])
+  useEffect(() => { timeLeftRef.current  = timeLeft  }, [timeLeft])
+  useEffect(() => { phaseRef.current     = phase     }, [phase])
+  useEffect(() => { questionsRef.current = questions }, [questions])
+
+  // Ref snapshot of current state — used in beforeunload (can't read state there)
+  const stateRef = useRef({ questions, answers, phase, timeLeft })
+  useEffect(() => { stateRef.current = { questions, answers, phase, timeLeft } }, [questions, answers, phase, timeLeft])
+
   // ── Question timer ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (phase === 'break' || phase === 'done') return
@@ -139,6 +153,115 @@ export default function PracticeTestClient({
   }, [phase])
 
   useEffect(() => { questionStartRef.current = Date.now() }, [currentIndex])
+
+  // ── Save-progress helper ───────────────────────────────────────────────────
+  // Builds the payload from current (or ref) state and POSTs to save-progress.
+  function buildProgressPayload(
+    qs: TestQuestion[],
+    ans: Record<string, LocalAnswer>,
+    secs: number,
+    mod: Phase,
+  ) {
+    return {
+      module: mod,
+      secondsRemaining: secs,
+      answers: qs.map((q, i) => {
+        const a = ans[q.id]
+        return {
+          questionId:       q.id,
+          correctAnswer:    q.correct_answer,
+          selectedAnswer:   a?.selected ?? null,
+          flagged:          a?.flagged ?? false,
+          timeSpentSeconds: a?.timeTaken ?? 0,
+          position:         i,
+        }
+      }),
+    }
+  }
+
+  async function saveProgress() {
+    const mod = phaseRef.current
+    if (mod === 'break' || mod === 'done') return
+    try {
+      await fetch(`/api/practice-test/${testId}/save-progress`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildProgressPayload(
+          questionsRef.current,
+          answersRef.current,
+          timeLeftRef.current,
+          mod,
+        )),
+      })
+    } catch { /* best-effort */ }
+  }
+
+  // ── Save on tab hide / close (sendBeacon for unload) ──────────────────────
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        const mod = phaseRef.current
+        if (mod === 'break' || mod === 'done') return
+        const payload = buildProgressPayload(
+          questionsRef.current, answersRef.current, timeLeftRef.current, mod,
+        )
+        navigator.sendBeacon(
+          `/api/practice-test/${testId}/save-progress`,
+          new Blob([JSON.stringify(payload)], { type: 'application/json' }),
+        )
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => document.removeEventListener('visibilitychange', handleVisibility)
+  }, [testId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Save progress helper ───────────────────────────────────────────────────
+  function buildProgressPayload(
+    qs: TestQuestion[],
+    ans: Record<string, LocalAnswer>,
+    mod: Phase,
+    secs: number,
+  ) {
+    return {
+      module: mod,
+      secondsRemaining: secs,
+      answers: qs.map((q, i) => ({
+        questionId:       q.id,
+        correctAnswer:    q.correct_answer,
+        selectedAnswer:   ans[q.id]?.selected ?? null,
+        flagged:          ans[q.id]?.flagged ?? false,
+        timeSpentSeconds: ans[q.id]?.timeTaken ?? 0,
+        position:         i,
+      })),
+    }
+  }
+
+  async function saveProgress() {
+    const { questions: qs, answers: ans, phase: mod, timeLeft: secs } = stateRef.current
+    if (mod === 'break' || mod === 'done') return
+    try {
+      await fetch(`/api/practice-test/${testId}/save-progress`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildProgressPayload(qs, ans, mod, secs)),
+      })
+    } catch { /* silent */ }
+  }
+
+  // ── Save on tab close / navigate away ─────────────────────────────────────
+  useEffect(() => {
+    const handleUnload = () => {
+      const { questions: qs, answers: ans, phase: mod, timeLeft: secs } = stateRef.current
+      if (mod === 'break' || mod === 'done') return
+      const payload = JSON.stringify(buildProgressPayload(qs, ans, mod, secs))
+      navigator.sendBeacon(
+        `/api/practice-test/${testId}/save-progress`,
+        new Blob([payload], { type: 'application/json' }),
+      )
+    }
+    window.addEventListener('beforeunload', handleUnload)
+    return () => window.removeEventListener('beforeunload', handleUnload)
+  }, [testId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -423,7 +546,7 @@ export default function PracticeTestClient({
 
               {/* Pause button */}
               <button
-                onClick={() => { saveCurrentTime(); setPaused(true) }}
+                onClick={() => { saveCurrentTime(); setPaused(true); saveProgress() }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors"
                 style={{ borderColor: 'var(--border)', color: 'var(--text-muted)', background: 'transparent' }}
                 title="Pause test">
