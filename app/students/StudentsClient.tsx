@@ -36,6 +36,12 @@ type WBStudentBoard = { shareId: string; boardId: string; boardName: string }
 
 type AssignmentStat = { correct: number; total: number; seconds: number }
 
+type PracticeTestRow = {
+  id: string; student_id: string; created_at: string; completed_at: string | null
+  status: string; rw_scaled_score: number | null; math_scaled_score: number | null
+  total_scaled_score: number | null; retake_of: string | null
+}
+
 type Props = {
   students: Student[]
   pendingStudents: Student[]
@@ -45,6 +51,7 @@ type Props = {
   sharesByStudent: Record<string, string[]>
   wbSharedWithStudents: Record<string, WBShareItem[]>
   wbStudentBoardsForTeacher: Record<string, WBStudentBoard[]>
+  practiceTestsByStudent: Record<string, PracticeTestRow[]>
 }
 
 // Group assignments by worksheet so redos collapse into one row
@@ -113,7 +120,7 @@ function fmtWithYear(iso: string) {
 
 function StudentCard({
   student, assignments, assignmentStats, allGuides, initialSharedIds, onDeleted,
-  initialWbShared, initialWbStudentBoards,
+  initialWbShared, initialWbStudentBoards, practiceTests,
 }: {
   student: Student
   assignments: Assignment[]
@@ -123,6 +130,7 @@ function StudentCard({
   onDeleted: (id: string) => void
   initialWbShared: WBShareItem[]
   initialWbStudentBoards: WBStudentBoard[]
+  practiceTests: PracticeTestRow[]
 }) {
   const supabase = createClient()
   const [expanded, setExpanded]           = useState(false)
@@ -131,11 +139,18 @@ function StudentCard({
   const [showMasterFile, setShowMasterFile] = useState(false)
   const [showGuides, setShowGuides]       = useState(false)
   const [showWhiteboards, setShowWhiteboards] = useState(false)
+  const [showTests, setShowTests]         = useState(false)
   const [sharedIds, setSharedIds]         = useState<Set<string>>(new Set(initialSharedIds))
   const [togglingId, setTogglingId]       = useState<string | null>(null)
   const [notifyOnShare, setNotifyOnShare] = useState(true)
   const [wbShared, setWbShared]           = useState<WBShareItem[]>(initialWbShared)
   const [revokingId, setRevokingId]       = useState<string | null>(null)
+
+  // Practice test assignment
+  const [showAssignModal, setShowAssignModal] = useState(false)
+  const [assignDueDate, setAssignDueDate]     = useState('')
+  const [assigning, setAssigning]             = useState(false)
+  const [assignSuccess, setAssignSuccess]     = useState(false)
 
   // Due date editing
   const [editingDueDateId, setEditingDueDateId] = useState<string | null>(null)
@@ -235,8 +250,31 @@ function StudentCard({
     setRevokingId(null)
   }
 
+  const assignTest = async () => {
+    setAssigning(true)
+    try {
+      const res = await fetch('/api/practice-test/assign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId: student.id, dueDate: assignDueDate || null }),
+      })
+      if (res.ok) {
+        setAssignSuccess(true)
+        setTimeout(() => { setShowAssignModal(false); setAssignSuccess(false); setAssignDueDate('') }, 2000)
+      } else {
+        alert('Failed to assign practice test. Please try again.')
+      }
+    } catch {
+      alert('Network error. Please try again.')
+    } finally {
+      setAssigning(false)
+    }
+  }
+
   const sharedCount = allGuides.filter(g => sharedIds.has(g.id)).length
   const wbCount = wbShared.length + initialWbStudentBoards.length
+  const completedTests  = practiceTests.filter(t => t.status === 'completed')
+  const inProgressTests = practiceTests.filter(t => t.status !== 'completed' && t.status !== 'abandoned')
 
   return (
     <>
@@ -294,7 +332,7 @@ function StudentCard({
 
           {/* Guides button */}
           <button
-            onClick={e => { e.stopPropagation(); setShowGuides(o => !o); setShowWhiteboards(false) }}
+            onClick={e => { e.stopPropagation(); setShowGuides(o => !o); setShowWhiteboards(false); setShowTests(false) }}
             className="text-xs px-2.5 py-1 rounded-lg font-medium border transition-colors flex items-center gap-1.5"
             style={{
               borderColor: showGuides ? 'var(--accent)' : 'var(--border)',
@@ -313,7 +351,7 @@ function StudentCard({
 
           {/* Whiteboards button */}
           <button
-            onClick={e => { e.stopPropagation(); setShowWhiteboards(o => !o); setShowGuides(false) }}
+            onClick={e => { e.stopPropagation(); setShowWhiteboards(o => !o); setShowGuides(false); setShowTests(false) }}
             className="text-xs px-2.5 py-1 rounded-lg font-medium border transition-colors flex items-center gap-1.5"
             style={{
               borderColor: showWhiteboards ? 'var(--accent)' : 'var(--border)',
@@ -326,6 +364,25 @@ function StudentCard({
               <span className="px-1.5 py-0 rounded-full text-white leading-5"
                 style={{ background: 'var(--accent)', fontSize: 10 }}>
                 {wbCount}
+              </span>
+            )}
+          </button>
+
+          {/* Practice Tests button */}
+          <button
+            onClick={e => { e.stopPropagation(); setShowTests(o => !o); setShowGuides(false); setShowWhiteboards(false) }}
+            className="text-xs px-2.5 py-1 rounded-lg font-medium border transition-colors flex items-center gap-1.5"
+            style={{
+              borderColor: showTests ? 'var(--accent)' : 'var(--border)',
+              color: showTests ? 'var(--accent)' : 'var(--foreground)',
+              background: showTests ? 'var(--accent-light)' : 'var(--background)',
+            }}
+          >
+            Tests
+            {completedTests.length > 0 && (
+              <span className="px-1.5 py-0 rounded-full text-white leading-5"
+                style={{ background: 'var(--accent)', fontSize: 10 }}>
+                {completedTests.length}
               </span>
             )}
           </button>
@@ -421,6 +478,93 @@ function StudentCard({
                 )
               })}
             </div>
+          )}
+        </div>
+      )}
+
+      {/* Practice Tests panel */}
+      {showTests && (
+        <div className="border-t" style={{ borderColor: 'var(--border)' }}>
+          {/* Header */}
+          <div className="px-6 py-3 flex items-center justify-between" style={{ background: 'var(--background)' }}>
+            <p className="text-xs font-semibold uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
+              Practice Tests
+            </p>
+            <button
+              onClick={e => { e.stopPropagation(); setShowAssignModal(true) }}
+              className="text-xs px-3 py-1 rounded-lg font-medium text-white"
+              style={{ background: 'var(--accent)' }}>
+              + Assign Practice Test
+            </button>
+          </div>
+
+          {/* In-progress tests */}
+          {inProgressTests.length > 0 && (
+            <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
+              <p className="px-6 py-1.5 text-xs font-medium" style={{ background: 'var(--background)', color: 'var(--text-muted)' }}>In Progress</p>
+              {inProgressTests.map(t => (
+                <div key={t.id} className="px-6 py-3 flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-medium" style={{ color: 'var(--foreground)' }}>{fmtWithYear(t.created_at)}</p>
+                    <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: '#eff6ff', color: '#1d4ed8' }}>In Progress</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Completed tests */}
+          {completedTests.length > 0 && (
+            <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
+              <p className="px-6 py-1.5 text-xs font-medium border-t" style={{ background: 'var(--background)', color: 'var(--text-muted)', borderColor: 'var(--border)' }}>Completed</p>
+              {completedTests.map(t => {
+                const scoreColor = (s: number | null) => {
+                  if (s == null) return 'var(--text-muted)'
+                  if (s >= 700) return '#16a34a'
+                  if (s >= 500) return '#d97706'
+                  return '#dc2626'
+                }
+                return (
+                  <div key={t.id} className="px-6 py-3 flex items-center justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium" style={{ color: 'var(--foreground)' }}>
+                        {fmtWithYear(t.created_at)}
+                        {t.retake_of && <span className="ml-1 text-xs" style={{ color: 'var(--text-muted)' }}>(Retake)</span>}
+                      </p>
+                    </div>
+                    {/* Scores */}
+                    <div className="flex items-baseline gap-4 flex-shrink-0">
+                      <div className="text-center">
+                        <p className="text-base font-bold" style={{ color: scoreColor(t.total_scaled_score) }}>{t.total_scaled_score ?? '—'}</p>
+                        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Total</p>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-sm font-semibold" style={{ color: scoreColor(t.rw_scaled_score) }}>{t.rw_scaled_score ?? '—'}</p>
+                        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>R&amp;W</p>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-sm font-semibold" style={{ color: scoreColor(t.math_scaled_score) }}>{t.math_scaled_score ?? '—'}</p>
+                        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Math</p>
+                      </div>
+                    </div>
+                    {/* Score Report link */}
+                    <Link
+                      href={`/students/${student.id}/practice-tests/${t.id}`}
+                      onClick={e => e.stopPropagation()}
+                      className="flex-shrink-0 text-xs px-3 py-1 rounded-lg font-medium text-white"
+                      style={{ background: 'var(--accent)' }}>
+                      Score Report
+                    </Link>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {practiceTests.length === 0 && (
+            <p className="px-6 py-4 text-sm" style={{ color: 'var(--text-muted)' }}>
+              No practice tests yet.
+            </p>
           )}
         </div>
       )}
@@ -684,6 +828,55 @@ function StudentCard({
 
     {showMasterFile && <MasterFileModal student={student} onClose={() => setShowMasterFile(false)} />}
 
+    {/* Assign Practice Test modal */}
+    {showAssignModal && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.5)' }}
+        onClick={() => { if (!assigning) setShowAssignModal(false) }}>
+        <div className="rounded-2xl shadow-2xl w-full max-w-sm p-6" style={{ background: 'var(--card)' }}
+          onClick={e => e.stopPropagation()}>
+          <h2 className="font-semibold text-base mb-1" style={{ color: 'var(--foreground)' }}>Assign Practice Test</h2>
+          <p className="text-xs mb-4" style={{ color: 'var(--text-muted)' }}>
+            Assign a full SAT practice test to {student.full_name || student.email}. They'll be notified by email.
+          </p>
+
+          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-muted)' }}>Due date (optional)</label>
+          <input
+            type="date"
+            value={assignDueDate}
+            onChange={e => setAssignDueDate(e.target.value)}
+            className="w-full px-3 py-2 rounded-xl border text-sm outline-none mb-5"
+            style={{ borderColor: 'var(--border)', background: 'var(--background)', color: 'var(--foreground)' }}
+          />
+
+          {assignSuccess ? (
+            <div className="flex items-center gap-2 justify-center py-2" style={{ color: '#16a34a' }}>
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+              <span className="text-sm font-medium">Assigned &amp; student notified!</span>
+            </div>
+          ) : (
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowAssignModal(false)}
+                disabled={assigning}
+                className="flex-1 py-2.5 rounded-xl text-sm font-medium border disabled:opacity-50"
+                style={{ borderColor: 'var(--border)', color: 'var(--foreground)' }}>
+                Cancel
+              </button>
+              <button
+                onClick={assignTest}
+                disabled={assigning}
+                className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-white disabled:opacity-50"
+                style={{ background: 'var(--accent)' }}>
+                {assigning ? 'Assigning…' : 'Assign Test →'}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    )}
+
     {showDeleteConfirm && (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.5)' }}>
         <div className="rounded-2xl shadow-2xl w-full max-w-sm p-6" style={{ background: 'var(--card)' }}>
@@ -831,7 +1024,7 @@ function PendingApprovalBanner({ initialPending }: { initialPending: Student[] }
 
 export default function StudentsClient({
   students: initialStudents, pendingStudents, assignmentsByStudent, assignmentStats, allGuides, sharesByStudent,
-  wbSharedWithStudents, wbStudentBoardsForTeacher,
+  wbSharedWithStudents, wbStudentBoardsForTeacher, practiceTestsByStudent,
 }: Props) {
   const [students, setStudents] = useState(initialStudents)
   const handleDeleted = (id: string) => setStudents(prev => prev.filter(s => s.id !== id))
@@ -864,6 +1057,7 @@ export default function StudentsClient({
           onDeleted={handleDeleted}
           initialWbShared={wbSharedWithStudents[student.id] ?? []}
           initialWbStudentBoards={wbStudentBoardsForTeacher[student.id] ?? []}
+          practiceTests={practiceTestsByStudent[student.id] ?? []}
         />
       ))}
     </div>

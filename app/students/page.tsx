@@ -154,6 +154,25 @@ export default async function StudentsPage() {
     sharesByStudent[s.student_id].push(s.guide_id)
   }
 
+  // Fetch practice tests per student (all statuses)
+  type PracticeTestRow = {
+    id: string; student_id: string; created_at: string; completed_at: string | null
+    status: string; rw_scaled_score: number | null; math_scaled_score: number | null
+    total_scaled_score: number | null; retake_of: string | null
+  }
+  const practiceTestsByStudent: Record<string, PracticeTestRow[]> = {}
+  if (studentIds.length > 0) {
+    const { data: allTests } = await supabase
+      .from('practice_tests')
+      .select('id, student_id, created_at, completed_at, status, rw_scaled_score, math_scaled_score, total_scaled_score, retake_of')
+      .in('student_id', studentIds)
+      .order('created_at', { ascending: false })
+    for (const t of (allTests ?? []) as PracticeTestRow[]) {
+      if (!practiceTestsByStudent[t.student_id]) practiceTestsByStudent[t.student_id] = []
+      practiceTestsByStudent[t.student_id].push(t)
+    }
+  }
+
   return (
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--background)' }}>
       <Nav userEmail={user.email} />
@@ -177,6 +196,7 @@ export default async function StudentsPage() {
           sharesByStudent={sharesByStudent}
           wbSharedWithStudents={wbSharedWithStudents}
           wbStudentBoardsForTeacher={wbStudentBoardsForTeacher}
+          practiceTestsByStudent={practiceTestsByStudent}
         />
       </main>
     </div>

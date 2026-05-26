@@ -19,7 +19,14 @@ type TestRecord = {
   retake_of: string | null
 }
 
-type Props = { tests: TestRecord[] }
+type AssignedTest = {
+  id: string
+  due_date: string | null
+  assigned_at: string
+  status: string
+}
+
+type Props = { tests: TestRecord[]; assignedTests?: AssignedTest[] }
 
 function fmtDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
@@ -82,9 +89,10 @@ function DeleteButton({
   )
 }
 
-export default function PracticeTestLauncher({ tests }: Props) {
+export default function PracticeTestLauncher({ tests, assignedTests = [] }: Props) {
   const router = useRouter()
   const [starting,       setStarting]       = useState(false)
+  const [startingAssignId, setStartingAssignId] = useState<string | null>(null)
   const [deletingId,     setDeletingId]     = useState<string | null>(null)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
 
@@ -118,6 +126,33 @@ export default function PracticeTestLauncher({ tests }: Props) {
     }
   }
 
+  async function startAssignedTest(assignmentId: string) {
+    setStartingAssignId(assignmentId)
+    try {
+      // Start a new test
+      const startRes = await fetch('/api/practice-test/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const startData = await startRes.json()
+      if (!startData.testId) return
+
+      // Link the test to the assignment and mark as started
+      await fetch(`/api/practice-test/assignments/${assignmentId}/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ testId: startData.testId }),
+      })
+
+      router.push(`/practice-test/${startData.testId}`)
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setStartingAssignId(null)
+    }
+  }
+
   const inProgress = tests.filter(t => t.status !== 'completed' && t.status !== 'abandoned')
   const completed  = tests.filter(t => t.status === 'completed')
 
@@ -130,6 +165,46 @@ export default function PracticeTestLauncher({ tests }: Props) {
           Full adaptive SAT practice — 4 modules, ~2h 25min
         </p>
       </div>
+
+      {/* Assigned tests from teacher */}
+      {assignedTests.length > 0 && (
+        <div className="flex flex-col gap-3">
+          <h2 className="text-sm font-semibold" style={{ color: 'var(--text-muted)' }}>ASSIGNED BY YOUR TUTOR</h2>
+          {assignedTests.map(a => {
+            const isOverdue = a.due_date && new Date(a.due_date) < new Date()
+            return (
+              <div
+                key={a.id}
+                className="rounded-2xl border p-4 flex items-center justify-between gap-4"
+                style={{
+                  background: 'var(--card)',
+                  borderColor: isOverdue ? '#fca5a5' : '#93c5fd',
+                }}>
+                <div>
+                  <p className="text-sm font-semibold" style={{ color: 'var(--foreground)' }}>
+                    Assigned Practice Test
+                  </p>
+                  {a.due_date ? (
+                    <p className="text-xs mt-0.5" style={{ color: isOverdue ? '#dc2626' : '#d97706' }}>
+                      {isOverdue ? '⚠️ Overdue — ' : '📅 Due '}
+                      {new Date(a.due_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    </p>
+                  ) : (
+                    <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>No due date</p>
+                  )}
+                </div>
+                <button
+                  onClick={() => startAssignedTest(a.id)}
+                  disabled={startingAssignId === a.id}
+                  className="px-4 py-2 rounded-xl text-sm font-semibold text-white flex-shrink-0 disabled:opacity-60"
+                  style={{ background: isOverdue ? '#dc2626' : 'var(--accent)' }}>
+                  {startingAssignId === a.id ? 'Starting…' : 'Start Test →'}
+                </button>
+              </div>
+            )
+          })}
+        </div>
+      )}
 
       {/* In-progress tests */}
       {inProgress.length > 0 && (

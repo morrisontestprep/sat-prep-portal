@@ -15,11 +15,27 @@ export default async function PracticeTestsPage() {
     .order('created_at', { ascending: false })
     .limit(20)
 
+  // Fetch any pending practice test assignments from the teacher
+  const { data: assignments } = await supabase
+    .from('practice_test_assignments')
+    .select('id, due_date, assigned_at, status, test_id')
+    .eq('student_id', user.id)
+    .eq('status', 'pending')
+    .order('assigned_at', { ascending: false })
+
   return (
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--background)' }}>
       <Nav userEmail={user.email} />
       <main className="flex-1 p-6 max-w-3xl mx-auto w-full">
-        <PracticeTestLauncher tests={tests ?? []} />
+        <PracticeTestLauncher
+          tests={tests ?? []}
+          assignedTests={(assignments ?? []).map(a => ({
+            id:         a.id,
+            due_date:   a.due_date,
+            assigned_at: a.assigned_at,
+            status:     a.status,
+          }))}
+        />
       </main>
     </div>
   )

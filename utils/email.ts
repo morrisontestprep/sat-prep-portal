@@ -246,6 +246,45 @@ export async function sendWorksheetAssignedNotification(
   })
 }
 
+// ── Notify student: practice test assigned ────────────────────────────────────
+export async function sendPracticeTestAssignedNotification(
+  studentEmail: string,
+  studentName: string,
+  dueDate: string | null,
+) {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://sat-prep-portal.vercel.app'
+  const dueLine = dueDate
+    ? `<tr><td style="padding:8px 0;color:#6b7280;font-size:14px">Due</td><td style="padding:8px 0;font-size:14px;font-weight:600;color:#d97706">${new Date(dueDate).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</td></tr>`
+    : ''
+
+  await transporter.sendMail({
+    from: `"Morrison Test Prep" <${TEACHER_EMAIL}>`,
+    to: studentEmail,
+    subject: `Practice test assigned${dueDate ? ` — due ${new Date(dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : ''}`,
+    html: `
+      <div style="font-family:sans-serif;max-width:480px;margin:0 auto">
+        <h2 style="color:#4f46e5">Practice Test Assigned</h2>
+        <p>Hi ${studentName || 'there'},</p>
+        <p>Your tutor has assigned you a full SAT practice test (4 modules, ~2h 25min).</p>
+        <table style="border-collapse:collapse;width:100%;margin:16px 0">
+          <tr>
+            <td style="padding:8px 0;color:#6b7280;font-size:14px">Test</td>
+            <td style="padding:8px 0;font-size:14px;font-weight:600">Full SAT Practice Test</td>
+          </tr>
+          ${dueLine}
+        </table>
+        <a href="${appUrl}/practice-test"
+          style="display:inline-block;background:#4f46e5;color:white;padding:10px 20px;border-radius:8px;text-decoration:none;font-size:14px">
+          Start Practice Test
+        </a>
+        <p style="color:#9ca3af;font-size:12px;margin-top:24px">
+          Morrison Test Prep &middot; <a href="${appUrl}" style="color:#9ca3af">${appUrl}</a>
+        </p>
+      </div>
+    `,
+  })
+}
+
 // ── Notify student: due date set or updated ───────────────────────────────────
 export async function sendDueDateUpdatedNotification(
   studentEmail: string,

@@ -4,7 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 // Shared types for the analytics dashboard
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type AnswerSource = 'worksheet' | 'sat_rush' | 'practice'
+export type AnswerSource = 'worksheet' | 'sat_rush' | 'practice' | 'practice_test'
 
 export type UnifiedAnswer = {
   // Question metadata
@@ -198,8 +198,62 @@ export async function fetchAllAnswers(supabase: SupabaseClient<any>, studentId: 
     }
   }
 
-  // ── 4. Merge and sort chronologically ────────────────────────────────────
-  const all = [...worksheetAnswers, ...rushAnswersList, ...practiceAnswersList]
+  // ── 4. Practice test answers ─────────────────────────────────────────────
+  const MODULE_LABELS: Record<string, string> = {
+    rw_m1: 'RW Module 1', rw_m2: 'RW Module 2',
+    math_m1: 'Math Module 1', math_m2: 'Math Module 2',
+  }
+
+  const { data: ptAnswers } = await supabase
+    .from('practice_test_answers')
+    .select('question_id, module, selected_answer, correct_answer, is_correct, time_spent_seconds, answered_at, practice_tests(created_at)')
+    .eq('student_id', studentId)
+    .not('is_correct', 'is', null) // only graded answers (module-complete rows)
+
+  const ptQuestionIds = [...new Set((ptAnswers ?? []).map((r: { question_id: string }) => r.question_id))]
+  const ptAnswersList: UnifiedAnswer[] = []
+
+  if (ptQuestionIds.length > 0) {
+    const { data: ptQuestions } = await supabase
+      .from('questions')
+      .select('id, subject, domain, skill, difficulty, correct_answer, question_image_url, answer_image_url')
+      .in('id', ptQuestionIds)
+
+    const qMap = new Map((ptQuestions ?? []).map((q: { id: string; subject: string; domain: string; skill: string; difficulty: string; correct_answer: string; question_image_url: string | null; answer_image_url: string | null }) => [q.id, q]))
+
+    for (const row of ptAnswers ?? []) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const r = row as any
+      const q = qMap.get(r.question_id)
+      if (!q) continue
+      // Use the test's created_at as answered_at if answer row has no timestamp
+      const testCreatedAt = Array.isArray(r.practice_tests) ? r.practice_tests[0]?.created_at : r.practice_tests?.created_at
+      const answeredAt = r.answered_at ?? testCreatedAt
+      if (!answeredAt) continue
+
+      ptAnswersList.push({
+        question_id:        r.question_id,
+        subject:            q.subject    ?? '',
+        domain:             q.domain     ?? '',
+        skill:              q.skill      ?? '',
+        difficulty:         q.difficulty ?? '',
+        correct_answer:     q.correct_answer ?? '',
+        question_image_url: q.question_image_url ?? null,
+        answer_image_url:   q.answer_image_url  ?? null,
+        selected_answer:    r.selected_answer,
+        is_correct:         r.is_correct,
+        time_spent_seconds: r.time_spent_seconds,
+        student_notes:      null,
+        confidence_level:   null,
+        source:             'practice_test',
+        answered_at:        answeredAt,
+        source_label:       `Practice Test — ${MODULE_LABELS[r.module] ?? r.module}`,
+      })
+    }
+  }
+
+  // ── 5. Merge and sort chronologically ────────────────────────────────────
+  const all = [...worksheetAnswers, ...rushAnswersList, ...practiceAnswersList, ...ptAnswersList]
   all.sort((a, b) => new Date(a.answered_at).getTime() - new Date(b.answered_at).getTime())
 
   return all
