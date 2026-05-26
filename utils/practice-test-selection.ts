@@ -34,7 +34,19 @@ type DifficultyLevel = 'Easy' | 'Medium' | 'Hard'
 
 type DifficultyRatio = { difficulty: DifficultyLevel; fraction: number }[]
 
-// ── Hard M2 difficulty ratio (20 / 50 / 30) ───────────────────────────────────
+// ── Difficulty ratios per module type ─────────────────────────────────────────
+const M1_RATIOS: DifficultyRatio = [
+  { difficulty: 'Easy',   fraction: 1/3 },
+  { difficulty: 'Medium', fraction: 1/3 },
+  { difficulty: 'Hard',   fraction: 1/3 },
+]
+
+const EASY_M2_RATIOS: DifficultyRatio = [
+  { difficulty: 'Easy',   fraction: 0.40 },
+  { difficulty: 'Medium', fraction: 0.40 },
+  { difficulty: 'Hard',   fraction: 0.20 },
+]
+
 const HARD_M2_RATIOS: DifficultyRatio = [
   { difficulty: 'Easy',   fraction: 0.20 },
   { difficulty: 'Medium', fraction: 0.50 },
@@ -212,9 +224,9 @@ export async function buildRWModule(
   seenIds: Set<string>,
   usedIds: Set<string>,
 ): Promise<QuestionRow[]> {
-  const targets   = RW_BLOCK_TARGETS[variant]
-  const isHardM2  = variant === 'hard_m2'
-  const total     = 27
+  const targets = RW_BLOCK_TARGETS[variant]
+  const ratios  = variant === 'm1' ? M1_RATIOS : variant === 'easy_m2' ? EASY_M2_RATIOS : HARD_M2_RATIOS
+  const total   = 27
 
   const pool = await fetchPool(supabase, 'english', RW_DOMAIN_ORDER)
 
@@ -227,10 +239,7 @@ export async function buildRWModule(
     const target = isLast ? remaining : targets[domain]
 
     const domainPool = pool.filter(q => q.domain === domain)
-
-    const picked = isHardM2
-      ? pickWithRatios(domainPool, seenIds, usedIds, target, HARD_M2_RATIOS)
-      : pickWithSkillDistribution(domainPool, seenIds, usedIds, target)
+    const picked = pickWithRatios(domainPool, seenIds, usedIds, target, ratios)
 
     // RW: NO difficulty sort — random order within each domain block
     result.push(...picked)
@@ -268,27 +277,23 @@ export async function buildMathModule(
   seenIds: Set<string>,
   usedIds: Set<string>,
 ): Promise<QuestionRow[]> {
-  const targets  = MATH_DOMAIN_TARGETS[variant]
-  const isHardM2 = variant === 'hard_m2'
-  const total    = 22
+  const targets = MATH_DOMAIN_TARGETS[variant]
+  const ratios  = variant === 'm1' ? M1_RATIOS : variant === 'easy_m2' ? EASY_M2_RATIOS : HARD_M2_RATIOS
+  const total   = 22
 
   const pool = await fetchPool(supabase, 'math', MATH_DOMAINS)
 
   const picked: QuestionRow[] = []
 
   for (const domain of MATH_DOMAINS) {
-    const domainPool = pool.filter(q => q.domain === domain)
-    const domainPicked = isHardM2
-      ? pickWithRatios(domainPool, seenIds, usedIds, targets[domain], HARD_M2_RATIOS)
-      : pickWithSkillDistribution(domainPool, seenIds, usedIds, targets[domain])
+    const domainPool   = pool.filter(q => q.domain === domain)
+    const domainPicked = pickWithRatios(domainPool, seenIds, usedIds, targets[domain], ratios)
     picked.push(...domainPicked)
   }
 
   // Fill any shortfall
   if (picked.length < total) {
-    const fallback = isHardM2
-      ? pickWithRatios(pool, seenIds, usedIds, total - picked.length, HARD_M2_RATIOS)
-      : pickWithSkillDistribution(pool, seenIds, usedIds, total - picked.length)
+    const fallback = pickWithRatios(pool, seenIds, usedIds, total - picked.length, ratios)
     picked.push(...fallback)
   }
 
