@@ -104,15 +104,17 @@ export default function PracticeTestClient({
   const breakInterval    = useRef<ReturnType<typeof setInterval> | null>(null)
   const questionStartRef = useRef<number>(Date.now())
 
-  // Keep refs in sync so beforeunload/visibilitychange always see current state
-  const answersRef   = useRef(answers)
-  const timeLeftRef  = useRef(timeLeft)
-  const phaseRef     = useRef(phase)
-  const questionsRef = useRef(questions)
-  useEffect(() => { answersRef.current   = answers   }, [answers])
-  useEffect(() => { timeLeftRef.current  = timeLeft  }, [timeLeft])
-  useEffect(() => { phaseRef.current     = phase     }, [phase])
-  useEffect(() => { questionsRef.current = questions }, [questions])
+  // Keep refs in sync so save callbacks always see current state
+  const answersRef      = useRef(answers)
+  const timeLeftRef     = useRef(timeLeft)
+  const phaseRef        = useRef(phase)
+  const questionsRef    = useRef(questions)
+  const currentIndexRef = useRef(currentIndex)
+  useEffect(() => { answersRef.current      = answers      }, [answers])
+  useEffect(() => { timeLeftRef.current     = timeLeft     }, [timeLeft])
+  useEffect(() => { phaseRef.current        = phase        }, [phase])
+  useEffect(() => { questionsRef.current    = questions    }, [questions])
+  useEffect(() => { currentIndexRef.current = currentIndex }, [currentIndex])
 
   // Ref snapshot of current state — used in beforeunload (can't read state there)
   const stateRef = useRef({ questions, answers, phase, timeLeft })
@@ -154,28 +156,41 @@ export default function PracticeTestClient({
 
   useEffect(() => { questionStartRef.current = Date.now() }, [currentIndex])
 
-  // ── Save-progress helper ───────────────────────────────────────────────────
-  // Builds the payload from current (or ref) state and POSTs to save-progress.
-  function buildProgressPayload(
-    qs: TestQuestion[],
-    ans: Record<string, LocalAnswer>,
-    secs: number,
-    mod: Phase,
-  ) {
+  // ── Save-progress helpers ──────────────────────────────────────────────────
+
+  // Builds a snapshot of answers including elapsed time on the current question.
+  // Reads directly from refs so it's always up to date — bypasses React's
+  // async state queue that would make saveCurrentTime() + saveProgress() racy.
+  function buildSnapshot() {
+    const elapsed  = (Date.now() - questionStartRef.current) / 1000
+    const snapshot = { ...answersRef.current }
+    const q        = questionsRef.current[currentIndexRef.current]
+    if (q) {
+      const prev = snapshot[q.id]
+      snapshot[q.id] = {
+        selected:  prev?.selected  ?? null,
+        flagged:   prev?.flagged   ?? false,
+        timeTaken: (prev?.timeTaken ?? 0) + elapsed,
+      }
+    }
+    return snapshot
+  }
+
+  function buildBeaconPayload() {
+    const mod = phaseRef.current
+    const ans = buildSnapshot()
+    const qs  = questionsRef.current
     return {
-      module: mod,
-      secondsRemaining: secs,
-      answers: qs.map((q, i) => {
-        const a = ans[q.id]
-        return {
-          questionId:       q.id,
-          correctAnswer:    q.correct_answer,
-          selectedAnswer:   a?.selected ?? null,
-          flagged:          a?.flagged ?? false,
-          timeSpentSeconds: a?.timeTaken ?? 0,
-          position:         i,
-        }
-      }),
+      module:           mod,
+      secondsRemaining: timeLeftRef.current,
+      answers: qs.map((q, i) => ({
+        questionId:       q.id,
+        correctAnswer:    q.correct_answer,
+        selectedAnswer:   ans[q.id]?.selected ?? null,
+        flagged:          ans[q.id]?.flagged  ?? false,
+        timeSpentSeconds: ans[q.id]?.timeTaken ?? 0,
+        position:         i,
+      })),
     }
   }
 
@@ -184,32 +199,31 @@ export default function PracticeTestClient({
     if (mod === 'break' || mod === 'done') return
     try {
       await fetch(`/api/practice-test/${testId}/save-progress`, {
-        method: 'POST',
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildProgressPayload(
-          questionsRef.current,
-          answersRef.current,
-          timeLeftRef.current,
-          mod,
-        )),
+        body:    JSON.stringify(buildBeaconPayload()),
       })
     } catch { /* best-effort */ }
   }
 
-  // ── Save on tab hide / close (sendBeacon for unload) ──────────────────────
+  // ── Auto-save every 30 s ───────────────────────────────────────────────────
+  useEffect(() => {
+    if (phase === 'break' || phase === 'done' || paused) return
+    const id = setInterval(() => { saveProgress() }, 30_000)
+    return () => clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, paused])
+
+  // ── Save on tab hide / close via sendBeacon ────────────────────────────────
   useEffect(() => {
     const handleVisibility = () => {
-      if (document.visibilityState === 'hidden') {
-        const mod = phaseRef.current
-        if (mod === 'break' || mod === 'done') return
-        const payload = buildProgressPayload(
-          questionsRef.current, answersRef.current, timeLeftRef.current, mod,
-        )
-        navigator.sendBeacon(
-          `/api/practice-test/${testId}/save-progress`,
-          new Blob([JSON.stringify(payload)], { type: 'application/json' }),
-        )
-      }
+      if (document.visibilityState !== 'hidden') return
+      const mod = phaseRef.current
+      if (mod === 'break' || mod === 'done') return
+      navigator.sendBeacon(
+        `/api/practice-test/${testId}/save-progress`,
+        new Blob([JSON.stringify(buildBeaconPayload())], { type: 'application/json' }),
+      )
     }
     document.addEventListener('visibilitychange', handleVisibility)
     return () => document.removeEventListener('visibilitychange', handleVisibility)
@@ -498,7 +512,7 @@ export default function PracticeTestClient({
 
               {/* Pause button */}
               <button
-                onClick={() => { saveCurrentTime(); setPaused(true); saveProgress() }}
+                onClick={async () => { await saveProgress(); setPaused(true); questionStartRef.current = Date.now() }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors"
                 style={{ borderColor: 'var(--border)', color: 'var(--text-muted)', background: 'transparent' }}
                 title="Pause test">
