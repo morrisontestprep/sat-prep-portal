@@ -2,8 +2,9 @@
 // Practice Test Question Selection
 //
 // Builds the four module question arrays for a practice test.
-// Logic: unseen questions preferred (same three sources as SAT Rush),
+// Logic: unseen questions preferred (same sources as SAT Rush),
 // domain/difficulty targets from real SAT data, ordering per module type.
+// Within each domain, questions are distributed evenly across skills.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { SupabaseClient } from '@supabase/supabase-js'
@@ -73,7 +74,7 @@ export async function getSeenQuestionIds(
   ])
 }
 
-// ── Pool fetchers ─────────────────────────────────────────────────────────────
+// ── Pool fetcher ──────────────────────────────────────────────────────────────
 
 async function fetchPool(
   supabase: SupabaseClient,
@@ -91,26 +92,76 @@ async function fetchPool(
   return (data ?? []) as QuestionRow[]
 }
 
-// ── Unseen-first picker ───────────────────────────────────────────────────────
-// Picks `count` questions from pool, unseen first, shuffled within each tier.
+// ── Skill-distributed picker ──────────────────────────────────────────────────
+//
+// Picks `count` questions from pool, distributing evenly across skills
+// (unseen-first within each skill). Updates usedIds in place.
 
-function pickUnseen(
-  pool: QuestionRow[],
+function pickWithSkillDistribution(
+  domainPool: QuestionRow[],
   seenIds: Set<string>,
   usedIds: Set<string>,
   count: number,
 ): QuestionRow[] {
-  const available = pool.filter(q => !usedIds.has(q.id))
-  const unseen = shuffle(available.filter(q => !seenIds.has(q.id)))
-  const seen   = shuffle(available.filter(q =>  seenIds.has(q.id)))
-  return [...unseen, ...seen].slice(0, count)
+  const available = domainPool.filter(q => !usedIds.has(q.id))
+
+  // Group available questions by skill
+  const bySkill = new Map<string, QuestionRow[]>()
+  for (const q of available) {
+    const s = q.skill ?? 'Unknown'
+    if (!bySkill.has(s)) bySkill.set(s, [])
+    bySkill.get(s)!.push(q)
+  }
+
+  const skills = [...bySkill.keys()]
+
+  // If only one skill (or no questions), fall back to simple unseen-first pick
+  if (skills.length <= 1) {
+    const unseen = shuffle(available.filter(q => !seenIds.has(q.id)))
+    const seen   = shuffle(available.filter(q =>  seenIds.has(q.id)))
+    const picked = [...unseen, ...seen].slice(0, count)
+    for (const q of picked) usedIds.add(q.id)
+    return picked
+  }
+
+  // Distribute `count` evenly across skills (remainder goes to randomly chosen skills)
+  const perSkill  = Math.floor(count / skills.length)
+  const extra     = count % skills.length
+  const shuffledSkills = shuffle(skills)
+
+  const picked: QuestionRow[] = []
+
+  for (let i = 0; i < shuffledSkills.length; i++) {
+    const skill  = shuffledSkills[i]
+    const pool   = bySkill.get(skill)!
+    const target = perSkill + (i < extra ? 1 : 0)
+
+    const unseen = shuffle(pool.filter(q => !seenIds.has(q.id)))
+    const seen   = shuffle(pool.filter(q =>  seenIds.has(q.id)))
+    const skillPicked = [...unseen, ...seen].slice(0, target)
+    picked.push(...skillPicked)
+  }
+
+  // Fill any shortfall (skill pools ran dry) from remaining available questions
+  if (picked.length < count) {
+    const pickedIds  = new Set(picked.map(q => q.id))
+    const remaining  = available.filter(q => !pickedIds.has(q.id))
+    const need       = count - picked.length
+    const unseen     = shuffle(remaining.filter(q => !seenIds.has(q.id)))
+    const seen       = shuffle(remaining.filter(q =>  seenIds.has(q.id)))
+    picked.push(...[...unseen, ...seen].slice(0, need))
+  }
+
+  const result = picked.slice(0, count)
+  for (const q of result) usedIds.add(q.id)
+  return result
 }
 
-// ── RW domain block builder ───────────────────────────────────────────────────
+// ── RW module builder ─────────────────────────────────────────────────────────
 //
-// Real SAT ordering: C&S → I&I → SEC → EoI (four blocks)
-// Within each block: sorted easy→hard
-// Block sizes vary per module (5–8 each), target totals 27
+// Real SAT ordering: C&S → I&I → SEC → EoI (four domain blocks)
+// Within each block: skill-distributed, then sorted easy→hard
+// Block sizes 5–8 each, total 27
 
 type RWModuleVariant = 'm1' | 'hard_m2' | 'easy_m2'
 
@@ -120,7 +171,6 @@ const RW_DIFFICULTY_POOL: Record<RWModuleVariant, DifficultyLevel[]> = {
   easy_m2: ['Easy', 'Medium', 'Hard'],
 }
 
-// Target question counts per domain block (flexible ±1)
 const RW_BLOCK_TARGETS: Record<RWModuleVariant, Record<string, number>> = {
   m1:      { 'Craft and Structure': 7, 'Information and Ideas': 8, 'Standard English Conventions': 6, 'Expression of Ideas': 6 },
   hard_m2: { 'Craft and Structure': 7, 'Information and Ideas': 7, 'Standard English Conventions': 7, 'Expression of Ideas': 6 },
@@ -140,9 +190,9 @@ export async function buildRWModule(
   seenIds: Set<string>,
   usedIds: Set<string>,
 ): Promise<QuestionRow[]> {
-  const diffs    = RW_DIFFICULTY_POOL[variant]
-  const targets  = RW_BLOCK_TARGETS[variant]
-  const total    = 27
+  const diffs   = RW_DIFFICULTY_POOL[variant]
+  const targets = RW_BLOCK_TARGETS[variant]
+  const total   = 27
 
   const pool = await fetchPool(supabase, 'english', RW_DOMAIN_ORDER, diffs)
 
@@ -155,12 +205,13 @@ export async function buildRWModule(
     const target = isLast ? remaining : targets[domain]
 
     const domainPool = pool.filter(q => q.domain === domain)
-    const picked = pickUnseen(domainPool, seenIds, usedIds, target)
 
-    // Sort easy → hard within block
+    // Distribute evenly across skills within this domain block
+    const picked = pickWithSkillDistribution(domainPool, seenIds, usedIds, target)
+
+    // Sort easy → hard within block (real SAT ordering)
     picked.sort((a, b) => difficultyRank(a) - difficultyRank(b))
 
-    for (const q of picked) usedIds.add(q.id)
     result.push(...picked)
     remaining -= picked.length
     if (remaining <= 0) break
@@ -171,8 +222,8 @@ export async function buildRWModule(
 
 // ── Math module builder ───────────────────────────────────────────────────────
 //
-// Domains interleaved (not blocked), sorted easy→hard overall.
-// Domain targets approximate percentages from real test data.
+// Domains interleaved (not blocked), skill-distributed within each domain,
+// then sorted easy→hard globally.
 
 type MathModuleVariant = 'm1' | 'hard_m2' | 'easy_m2'
 
@@ -189,9 +240,6 @@ const MATH_DOMAINS = [
   'Geometry and Trigonometry',
 ]
 
-// Target counts per domain (from real test analysis — ranges, not hard constraints)
-// M1: Alg 6-9, AM 5-9, PSDA 3-5, Geo 3-5 → targeting 7,7,4,4 = 22
-// M2: same distribution
 const MATH_DOMAIN_TARGETS: Record<MathModuleVariant, Record<string, number>> = {
   m1:      { 'Algebra': 7, 'Advanced Math': 7, 'Problem-Solving and Data Analysis': 4, 'Geometry and Trigonometry': 4 },
   hard_m2: { 'Algebra': 7, 'Advanced Math': 7, 'Problem-Solving and Data Analysis': 4, 'Geometry and Trigonometry': 4 },
@@ -212,23 +260,20 @@ export async function buildMathModule(
 
   const picked: QuestionRow[] = []
 
-  // Pick per domain first, then fill remainder from any domain
+  // Pick per domain with skill distribution
   for (const domain of MATH_DOMAINS) {
     const domainPool = pool.filter(q => q.domain === domain)
-    const domainPicked = pickUnseen(domainPool, seenIds, usedIds, targets[domain])
-    for (const q of domainPicked) usedIds.add(q.id)
+    const domainPicked = pickWithSkillDistribution(domainPool, seenIds, usedIds, targets[domain])
     picked.push(...domainPicked)
   }
 
-  // If short, fill from any remaining domain pool
+  // Fill shortfall from any remaining domain
   if (picked.length < total) {
-    const remaining = total - picked.length
-    const fallback = pickUnseen(pool, seenIds, usedIds, remaining)
-    for (const q of fallback) usedIds.add(q.id)
+    const need     = total - picked.length
+    const fallback = pickWithSkillDistribution(pool, seenIds, usedIds, need)
     picked.push(...fallback)
   }
 
-  // Truncate if somehow over (shouldn't happen, but safe)
   const result = picked.slice(0, total)
 
   // Sort by difficulty easy → hard (interleaved across domains)
