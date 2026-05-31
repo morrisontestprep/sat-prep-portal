@@ -169,9 +169,27 @@ function pickWithSkillDistribution(
   return result
 }
 
-// ── Ratio-based picker (Hard M2 only) ────────────────────────────────────────
+// ── Integer allocation (largest-remainder / Hamilton's method) ────────────────
+// Distributes `total` items across buckets by `fractions` (should sum to 1).
+// Returns integer counts that always sum exactly to `total`, with no systematic
+// bias toward any bucket.
+function allocateCounts(total: number, fractions: number[]): number[] {
+  const exact  = fractions.map(f => total * f)
+  const floors = exact.map(Math.floor)
+  let rem      = total - floors.reduce((a, b) => a + b, 0)
+  const order  = exact
+    .map((v, i) => ({ i, frac: v - Math.floor(v) }))
+    .sort((a, b) => b.frac - a.frac || a.i - b.i)
+  for (let k = 0; k < rem; k++) floors[order[k].i]++
+  return floors
+}
+
+// ── Ratio-based picker ────────────────────────────────────────────────────────
 // Picks `count` questions hitting explicit difficulty fractions,
 // with skill distribution applied within each difficulty tier.
+// NOTE: Uses Math.round per call — fine for large counts (RW domain blocks)
+// but accumulates rounding error when called many times with small counts.
+// Math modules use allocateCounts + the difficulty-first path instead.
 function pickWithRatios(
   pool: QuestionRow[],
   seenIds: Set<string>,
@@ -283,15 +301,50 @@ export async function buildMathModule(
 
   const pool = await fetchPool(supabase, 'math', MATH_DOMAINS)
 
+  // ① Compute module-level difficulty counts using largest-remainder allocation.
+  //    This avoids the per-domain rounding bug where applying Math.round to
+  //    small domain counts (7 or 4) systematically over-fills the last bucket.
+  //    e.g. M1 was producing 6/6/10 instead of 7/7/8, Easy M2 gave 10/10/2
+  //    instead of 9/9/4, Hard M2 gave 4/12/6 instead of 4/11/7.
+  const diffCounts = allocateCounts(total, ratios.map(r => r.fraction))
+  // diffCounts[i] = questions to pick at ratios[i].difficulty
+
+  const domainFractions = MATH_DOMAINS.map(d => targets[d] / total)
+
   const picked: QuestionRow[] = []
 
-  for (const domain of MATH_DOMAINS) {
-    const domainPool   = pool.filter(q => q.domain === domain)
-    const domainPicked = pickWithRatios(domainPool, seenIds, usedIds, targets[domain], ratios)
-    picked.push(...domainPicked)
+  // ② For each difficulty tier, pick the globally-correct count and distribute
+  //    across domains proportionally (also using largest-remainder so domain
+  //    counts always sum to the difficulty target).
+  for (let ri = 0; ri < ratios.length; ri++) {
+    const { difficulty } = ratios[ri]
+    const diffTarget = diffCounts[ri]
+    if (diffTarget <= 0) continue
+
+    const diffPool = pool.filter(q => q.difficulty === difficulty)
+
+    // Distribute this difficulty's allocation across domains
+    const domainCounts = allocateCounts(diffTarget, domainFractions)
+
+    const diffPicked: QuestionRow[] = []
+    for (let di = 0; di < MATH_DOMAINS.length; di++) {
+      const domainTarget = domainCounts[di]
+      if (domainTarget <= 0) continue
+      const domainDiffPool = diffPool.filter(q => q.domain === MATH_DOMAINS[di])
+      diffPicked.push(...pickWithSkillDistribution(domainDiffPool, seenIds, usedIds, domainTarget))
+    }
+
+    // Fill shortfall within this difficulty tier from any domain
+    if (diffPicked.length < diffTarget) {
+      const pickedIds = new Set(diffPicked.map(q => q.id))
+      const rest = diffPool.filter(q => !pickedIds.has(q.id))
+      diffPicked.push(...pickWithSkillDistribution(rest, seenIds, usedIds, diffTarget - diffPicked.length))
+    }
+
+    picked.push(...diffPicked.slice(0, diffTarget))
   }
 
-  // Fill any shortfall
+  // ③ Fill any overall shortfall (e.g. pool too thin in some difficulty)
   if (picked.length < total) {
     const fallback = pickWithRatios(pool, seenIds, usedIds, total - picked.length, ratios)
     picked.push(...fallback)
