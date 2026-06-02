@@ -97,7 +97,19 @@ export default function PracticeTestClient({
     return map
   })
 
-  const [freeText, setFreeText]         = useState('')
+  const [freeText, setFreeText]         = useState<string>(() => {
+    // On initial load, pre-populate freeText if the starting question is a
+    // free-response question that already has a saved answer (test resume case).
+    const answeredPositions = new Set(
+      initialSavedAnswers.filter(a => a.selected_answer).map(a => a.position)
+    )
+    const firstIdx = initialQuestions.findIndex((_, i) => !answeredPositions.has(i))
+    const startIdx = firstIdx === -1 ? 0 : firstIdx
+    const startQ   = initialQuestions[startIdx]
+    if (!startQ || !isFreeResponse(startQ.correct_answer)) return ''
+    const saved = initialSavedAnswers.find(a => a.position === startIdx)
+    return saved?.selected_answer ?? ''
+  })
   const [timeLeft, setTimeLeft]         = useState(initialTimeSeconds)
   const [breakTimeLeft, setBreakTimeLeft] = useState(BREAK_SECONDS)
   const [submitting, setSubmitting]     = useState(false)
@@ -313,9 +325,13 @@ export default function PracticeTestClient({
   const navigate = useCallback((idx: number) => {
     saveCurrentTime()
     setCurrentIndex(idx)
-    setFreeText('')
+    // Pre-populate freeText with any saved answer for FR questions so the
+    // student can edit in-place. Non-FR questions always get an empty string.
+    const nextQ = questionsRef.current[idx]
+    const nextIsFR = nextQ ? isFreeResponse(nextQ.correct_answer) : false
+    setFreeText(nextIsFR ? (answersRef.current[nextQ!.id]?.selected ?? '') : '')
     questionStartRef.current = Date.now()
-  }, [currentQ]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   function toggleFlag() {
     if (!currentQ) return
@@ -345,16 +361,19 @@ export default function PracticeTestClient({
 
   function submitFreeText() {
     if (!currentQ || !freeText.trim()) return
-    const elapsed = getTimeTaken()
+    const elapsed    = getTimeTaken()
+    const newAnswer  = freeText.trim()
     setAnswers(prev => ({
       ...prev,
       [currentQ.id]: {
-        selected:  freeText.trim(),
+        selected:  newAnswer,
         flagged:   prev[currentQ.id]?.flagged ?? false,
         timeTaken: (prev[currentQ.id]?.timeTaken ?? 0) + elapsed,
       },
     }))
-    setFreeText('')
+    // Keep freeText populated (don't reset to '') so the student can immediately
+    // edit the saved answer without having to retype from scratch.
+    setFreeText(newAnswer)
     questionStartRef.current = Date.now()
   }
 
@@ -659,7 +678,7 @@ export default function PracticeTestClient({
               <div className="flex gap-2">
                 <input
                   type="text"
-                  value={freeText || currentAns?.selected || ''}
+                  value={freeText}
                   onChange={e => setFreeText(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter') submitFreeText() }}
                   placeholder="Type your answer (e.g. 5, 3/4, 0.75)"
